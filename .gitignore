@@ -1,0 +1,8 @@
+# 本仓库只备份 GitHub 运维类技能；其余技能按需单独决定是否入库。
+# SandboxPackage_DEV 有 29MB 示例包，暂不入库（想备份就删掉下面这行再 commit）。
+SandboxPackage_DEV/
+
+# 系统/编辑器噪声
+.DS_Store
+Thumbs.db
+*~
