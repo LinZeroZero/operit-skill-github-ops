@@ -158,4 +158,5 @@ sh /sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh install
 - `/sdcard/Download/Operit/skills/GitHub运维/references/troubleshoot.md` —— 症状 → 原因 → 处理（五档分类）
 - `/sdcard/Download/Operit/skills/GitHub运维/references/gh-json-fields.md` —— 每个命令依赖哪些字段（版本敏感点清单）
 - `/sdcard/Download/Operit/skills/GitHub运维/references/destructive.md` —— 破坏性操作矩阵与闸门规则
+- `/sdcard/Download/Operit/skills/GitHub运维/references/sanitize.md` —— 仓库转 public 前的脱敏流程（什么该改、什么该留、远端复查）
 - `/sdcard/Download/Operit/skills/GitHub运维/scripts/` —— 四个脚本的实现
