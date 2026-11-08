@@ -23,7 +23,8 @@ cp -r /tmp/sk/GitHub运维 /tmp/sk/APK逆向改包 .
 rm -rf /tmp/sk
 ```
 
-私有仓库 clone 时用令牌：`https://<login>:<token>@github.com/...`，用完记得撤令牌。
+仓库是 **Public**，直接 `git clone` 即可，无需令牌：
+`git clone https://github.com/LinZeroZero/operit-skills.git`
 
 `/sdcard` 是 noexec 挂载，仓库内所有脚本只能 `sh <脚本路径>` 调用，不能 `./脚本`。
 
