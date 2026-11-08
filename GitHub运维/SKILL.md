@@ -34,7 +34,7 @@ description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Rel
 
 ```sh
 S="/sdcard/Download/Operit/skills/GitHub运维/scripts"
-P="/storage/emulated/0/AI/你的项目"
+P="/sdcard/your-project"
 
 sh "$S/ghenv.sh"  check                              # 1. 环境体检，必须全绿
 sh "$S/ghrepo.sh" check "$P"                          # 2. 只读体检：体积/文件数/大文件/连通性
@@ -89,7 +89,7 @@ A="/sdcard/Download/Operit/skills/GitHub运维/scripts/ghadm.sh"
 | 看仓库概况 | `sh "$A" repo-view owner/repo` |
 | 列我的仓库 | `sh "$A" repo-list 30` |
 | 改描述/可见性/topics | `sh "$A" repo-edit owner/repo "新描述" private bug,android` |
-| 克隆 | `sh "$A" repo-clone owner/repo /sdcard/AI/x` |
+| 克隆 | `sh "$A" repo-clone owner/repo /sdcard/your-project/x` |
 | 提 PR（head 取当前分支） | `sh "$A" pr-create "$P" "标题" "正文" main` |
 | 列/看 PR | `sh "$A" pr-list owner/repo open 20` / `pr-view owner/repo 3` |
 | 合并 PR | `sh "$A" pr-merge owner/repo 3 squash` |

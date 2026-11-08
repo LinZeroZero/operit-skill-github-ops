@@ -17,8 +17,8 @@
 **处理**：`git config --global --add safe.directory '*'`，
 或精确登记两种路径写法：
 ```sh
-git config --global --add safe.directory /storage/emulated/0/AI/项目
-git config --global --add safe.directory /sdcard/AI/项目
+git config --global --add safe.directory /sdcard/your-project
+git config --global --add safe.directory /storage/emulated/0/your-project
 ```
 （git 比较的是 realpath，两种写法的字符串不同。）
 

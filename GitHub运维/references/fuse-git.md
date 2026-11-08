@@ -16,7 +16,7 @@
 ### 现象 A：`/sdcard` 内建仓，add 直接失败
 
 ```sh
-mkdir -p /storage/emulated/0/AI/t && cd /storage/emulated/0/AI/t
+mkdir -p /sdcard/t && cd /sdcard/t
 git init -q -b main && echo hi > a.txt && git add a.txt
 # error: unable to write file .git/objects/45/b983be36...: No such file or directory
 # fatal: adding files failed
@@ -29,7 +29,7 @@ git init -q -b main && echo hi > a.txt && git add a.txt
 
 ```sh
 git init -q --bare -b main /root/repos/x.git
-G="git --git-dir=/root/repos/x.git --work-tree=/storage/emulated/0/AI/项目"
+G="git --git-dir=/root/repos/x.git --work-tree=/sdcard/your-project"
 $G add -A .
 # 成功，但每个对象残留两份临时文件：
 #   objects/fa/.l2s.tmp_obj_EZJTUX0001
@@ -53,7 +53,7 @@ echo y > ab/tmp2 && ln ab/tmp2 ab/final2   # ln: failed to access 'ab/tmp2': No 
 ## 3. 解法一（推荐）：`core.createObject rename`
 
 ```sh
-cd /storage/emulated/0/AI/项目
+cd /sdcard/your-project
 git init -b main
 git config core.createObject rename    # 关键一行
 git config core.fileMode false         # FUSE 权限位不可信，否则满屏 mode 变更
@@ -72,9 +72,9 @@ git add -A .                           # 实测 exit 0，对象正常落盘、�
 
 ```sh
 git init -q --bare -b main /root/repos/项目.git
-G="git --git-dir=/root/repos/项目.git --work-tree=/storage/emulated/0/AI/项目"
+G="git --git-dir=/root/repos/项目.git --work-tree=/sdcard/your-project"
 $G config core.bare false
-$G config core.worktree /storage/emulated/0/AI/项目
+$G config core.worktree /sdcard/your-project
 $G config core.fileMode false
 $G add -A .
 $G commit -m "..."
