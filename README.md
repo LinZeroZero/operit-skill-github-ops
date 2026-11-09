@@ -1,49 +1,103 @@
-# Operit 技能备份
+# Operit 技能 · GitHub 运维
 
-Operit（Android / proot）里的自定义 skill，纯备份用途。
+在 Android 手机上用 `gh` + `git` 管理 GitHub 的技能包：建仓推送、Release、PR/Issue、Actions、Gist，
+并且专门解决 Android 独有的坑（FUSE 存储上 `git add` 报路径不存在、令牌如何不进 `ps`、toybox 与 GNU 命令差异）。
 
-## 内容
+四个脚本：`ghenv`（环境）/ `ghrepo`（推送与发版）/ `ghadm`（仓库·PR·Issue·CI·Gist）/ `ghlib`（公共库）。
+令牌只从环境变量 `GH_TOKEN` 读，不写 remote、不写 `~/.git-credentials`、不拼进命令行。
 
-| 目录 | frontmatter `name` | 作用 |
-|---|---|---|
-| `GitHub运维/` | `GitHub运维` | 用 gh + git 管 GitHub：建仓推送、Release、PR/Issue/Actions/Gist；含 FUSE 上 git 写对象失败的必设 config |
-| `APK逆向改包/` | `APK逆向改包` | 反编译 APK、改默认值/开关/常量/资源/标识，再回编译重签名并验证 |
-| `代码审查/` | `代码审查` | 四阶段流程 + 严重度分级，产出带 `file:line` 与可追溯依据的 finding；含 shell/Magisk、KSU WebUI、smali 三档与上游 30 篇语言档 |
-| `UI审查/` | `UI审查` | 按层级→间距→排版→色彩→深度→图像→收尾七步扫查界面，每条 finding 挂规则号（§）、严重度与实测数值；只诊断不改代码 |
+## 安装
 
-`SandboxPackage_DEV`（29 MB 示例包）暂未入库，见 `.gitignore`——想备份就删掉里面那一行再 commit。
+装到哪：`/sdcard/Download/Operit/skills/GitHub运维/` —— Operit 的技能目录，放好即被识别。
 
-## 恢复方式
+### 方式一：让 Operit 的 AI 自己装（推荐）
 
-Operit 的技能目录固定为 `/sdcard/Download/Operit/skills/<skill_name>/`，
-且目录名**必须**与 `SKILL.md` frontmatter 里的 `name` 一致，否则包管理会报「未找到 SKILL.md」。
+把下面这句话直接发给 Operit 里的 AI：
+
+> 安装技能：GitHub 运维，仓库是 https://github.com/LinZeroZero/operit-skill-github-ops
+
+AI 会去 Release 取包、解开、校验 `SKILL.md` 是否到位。
+
+### 方式二：一行命令（Android 自带 curl + tar，不需要 root）
 
 ```sh
-cd /sdcard/Download/Operit/skills
-git clone https://github.com/LinZeroZero/operit-skills.git /tmp/sk
-cp -r /tmp/sk/GitHub运维 /tmp/sk/APK逆向改包 /tmp/sk/代码审查 /tmp/sk/UI审查 .
-rm -rf /tmp/sk
+curl -fL https://github.com/LinZeroZero/operit-skill-github-ops/releases/latest/download/github-ops.tar.gz \
+  | tar -xz -C /sdcard/Download/Operit/skills
 ```
 
-仓库是 **Public**，直接 `git clone` 即可，无需令牌：
-`git clone https://github.com/LinZeroZero/operit-skills.git`
+### 方式三：安装脚本（带回滚、验包、`--check`）
 
-`/sdcard` 是 noexec 挂载，仓库内所有脚本只能 `sh <脚本路径>` 调用，不能 `./脚本`。
+```sh
+curl -fL -o /data/local/tmp/ops-install.sh \
+  https://raw.githubusercontent.com/LinZeroZero/operit-skill-github-ops/main/install.sh
+
+sh /data/local/tmp/ops-install.sh --check   # 先看现在装的是什么，不下载
+sh /data/local/tmp/ops-install.sh           # 安装
+```
+
+脚本流程：下载 → `tar -tzf` 验包 → 备份旧版 → 解包 → 校验 `SKILL.md`。
+已存在同名目录时**不会直接覆盖**，而是改名为 `GitHub运维.bak.<时间戳>`；确定要硬覆盖就加 `--force`。
+
+也可以指定别处先试装，不影响现有技能：
+
+```sh
+sh /data/local/tmp/ops-install.sh /sdcard/tmp/skills
+```
+
+### 方式四：git clone（想用 `git pull` 跟进更新）
+
+```sh
+git clone --depth 1 https://github.com/LinZeroZero/operit-skill-github-ops.git \
+  "/sdcard/Download/Operit/skills/GitHub运维"
+```
+
+## 装完验证
+
+```sh
+sh "/sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh" check
+```
+
+期望看到 `GH_VERSION_OK=yes`、`TOKEN=present`、`API=ok`。
+要先有令牌：`export GH_TOKEN=<你的令牌>`，scope 至少 `repo`；需要删仓库再加 `delete_repo`。
+
+`gh` 不用自己装：`vendor/gh_2.103.3_linux_arm64.tar.gz` 就在仓库里，
+`sh scripts/ghenv.sh install` 会离线解压到固定位置，全程不联网。
+
+## 目录
+
+| 路径 | 内容 |
+|---|---|
+| `SKILL.md` | 技能主文件，AI 入口：四条硬规则 + 两条主链路 |
+| `scripts/ghenv.sh` | gh 安装、体检、恢复（开工第一步） |
+| `scripts/ghrepo.sh` | 建仓、提交、推送、发 Release |
+| `scripts/ghadm.sh` | 仓库/PR/Issue/Actions/Gist 管理 |
+| `scripts/ghlib.sh` | 公共库（退出码、闸门、探测） |
+| `references/fuse-git.md` | FUSE 上 `add` 失败的根因与两条解法 |
+| `references/auth.md` | 令牌怎么选、权限最小集、401/403/404 对照 |
+| `references/troubleshoot.md` | 症状 → 原因 → 处理（五档） |
+| `references/gh-json-fields.md` | 各命令依赖的 JSON 字段（版本敏感点） |
+| `references/destructive.md` | 破坏性操作矩阵与闸门规则 |
+| `references/sanitize.md` | 仓库转 public 前怎么脱敏 |
+| `vendor/` | gh 离线包 |
+
+## 更新
+
+- 方式一/三：重跑 `install.sh`（旧目录自动备份成 `.bak.<时间戳>`）
+- 方式四：`git -C "/sdcard/Download/Operit/skills/GitHub运维" pull`
+
+## 卸载
+
+```sh
+mv "/sdcard/Download/Operit/skills/GitHub运维" "/sdcard/Download/GitHub运维.bak"
+```
+
+不提供 `install.sh --remove`：删目录不可逆，交给使用者自己决定更安全。
 
 ## 依赖
 
-- **GitHub运维**：gh 2.45+。仓库内 `GitHub运维/vendor/gh_2.103.3_linux_arm64.tar.gz` 可离线安装，
-  细节见 `GitHub运维/references/toolchain-gh.md`；git 需 ≥ 2.40。
-- **APK逆向改包**：Operit 的 `apk_reverse` 包 + proot 内 apktool / jadx / aapt2，
-  版本与路径见 `APK逆向改包/references/toolchain-apk_reverse.md`。
-- **代码审查**：无第三方运行时依赖，上游 30 篇 + cross-cutting 5 篇规则档已内置，断网可用。
-  `browser` / `code_runner` / `git` 等只在探测到时才启用增强路径。
-- **UI审查**：同样零依赖。取数脚本 `UI审查/scripts/audit.js` 可三处复用——
-  `browser` 包的 `evaluate`、任意浏览器控制台粘贴、以及 `node` 直接 `require` 纯函数。
-  没有 `browser` 包时自动降级为静态 CSS 取数，并在 finding 里标注"取数方式"。
-
-## 注意
-
-- 技能目录在 `/sdcard` 上，会被部分清理类 App 当垃圾扫掉；`.git` 同样风险。定期 `git add -A && commit && push` 做增量备份。
-- 只有 `GitHub运维` 需要令牌，且只走 `GH_TOKEN` 环境变量；本仓库内不含任何明文令牌或私钥。
-  其余技能不含凭据，也没有联网依赖。
+| 依赖 | 是否有 | 说明 |
+|---|---|---|
+| `curl`、`tar`、`gzip` | Android 自带 | `/system/bin`，toybox 0.8.12，装技能零额外依赖 |
+| `git` | 需自备 | proot Ubuntu（`apt install git`）或 Termux |
+| `gh` | 仓库自带 | `vendor/` 离线包，`ghenv.sh install` 解压；要求 ≥ 2.45 |
+| root | 不需要 | 全部操作在 `/sdcard` 与用户目录内 |
