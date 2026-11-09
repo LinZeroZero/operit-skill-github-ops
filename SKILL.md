@@ -78,7 +78,70 @@ sh "$S/ghrepo.sh" republish "$P" v2.0.18 '新标题' "$P/新包.apk" /sdcard/not
 与老实现的差别：以前是「先删旧资产再传新的」，旧文件名的链接会 404；
 现在用 `gh release upload --clobber`，**同名覆盖、旧链接不失效**。
 
-## 2. 主链路二：日常运维（`ghadm.sh`）
+## 2. 一个目录下多个技能：一技能一仓
+
+技能目录下常有好几个技能。**别把父目录做成一个仓库**：历史混在一起，改 A 的提交里会掺着 B 的发布物，
+发包时还得手工挑文件。正确形态是**每个技能目录各自是仓库**：
+
+```
+/sdcard/Download/Operit/skills/     ← 不是仓库，没有 .git
+├── GitHub运维/                     ← 自己是仓库
+│   ├── .git  README.md  install.sh  SKILL.md  references/  scripts/
+└── APK逆向改包/                    ← 自己是仓库
+    └── .git  README.md  install.sh  SKILL.md  references/
+```
+
+### 从混合仓库拆出来（保留历史）
+
+`subtree split` 按目录前缀重写历史，每个技能得到一条干净的提交链：
+
+```sh
+git clone --no-hardlinks /sdcard/Download/Operit/skills /root/split   # 先落到 ext4，FUSE 上拆很慢
+cd /root/split
+git config core.quotePath false            # 硬要求，见下方说明
+git subtree split --prefix="GitHub运维"  -b ops
+git subtree split --prefix="APK逆向改包" -b apk
+```
+
+`core.quotePath false` 不能省。默认设置下 git 把中文路径输出成八进制转义，`subtree split`
+拿它跟真名比较直接断言失败：`assertion failed: test "GitHub350277220347273264" = GitHub运维`。
+
+### 每个技能目录各自成仓
+
+```sh
+D=/sdcard/Download/Operit/skills
+cd "$D/GitHub运维"
+git init -q -b main
+git config core.createObject rename     # FUSE 必需（规则 2），ext4 上设了也无害
+git config core.fileMode false          # /sdcard 上 mode 不可靠，防它制造噪音改动
+git remote add origin https://github.com/<owner>/operit-skill-github-ops.git
+git fetch -q origin && git reset --hard origin/main
+```
+
+之后就是第 1 节那套 `stage / commit / push`，`P` 换成技能目录即可，各技能互不影响。
+
+### 发布物：顶层必须是中文技能名
+
+Operit 靠目录名认技能，解压后要得到 `skills/<技能名>/SKILL.md`，所以打包时顶层目录写成技能名：
+
+```sh
+tar -czf /root/github-ops.tar.gz --exclude='GitHub运维/.git' \
+  -C /sdcard/Download/Operit/skills 'GitHub运维'
+tar -tzf /root/github-ops.tar.gz | grep -c '\.git/'     # 必须是 0
+```
+
+`--exclude` 一定要带：FUSE 的 `.git` 里有 `.l2s.tmp_*` 符号链接，`cp -a` 会刷一屏
+`Too many levels of symbolic links`，产物还会白白大出一倍。
+
+### 三个真踩过的坑
+
+| 现象 | 原因 | 处理 |
+|---|---|---|
+| push 报成功，但远端 `main` 没变 | `push` 推的是 **HEAD 所在分支**，当时停在 `ops` 分支上 | 先 `git -C "$P" branch --show-current` 确认；切回 `main` 重推，再删掉多余分支：`sh "$A" api -X DELETE repos/<owner>/<repo>/git/refs/heads/<branch>` |
+| 建了新仓库，旧仓库还挂着两个技能 | 只建了新的，旧的没处理 | 用改名而不是删：`sh "$A" api -X PATCH repos/<owner>/<old> -f name=<new>`，历史与旧 URL 都保留 |
+| 拆完技能文档里还写着旧仓库名 | 文档没跟着改 | `grep -rIn '<旧仓库名>'` 清干净；别指望旧 URL 靠 301 兜住 |
+
+## 3. 主链路二：日常运维（`ghadm.sh`）
 
 仓库参数一律是 `owner/repo`；也可以写 `.` 表示「用当前目录的 origin」。
 
@@ -112,7 +175,7 @@ A="/sdcard/Download/Operit/skills/GitHub运维/scripts/ghadm.sh"
 （实测确认，见 `references/gh-json-fields.md` §3）。
 完整矩阵见 `references/destructive.md`。
 
-## 3. gh 环境（重装 proot 之后先看这段）
+## 4. gh 环境（重装 proot 之后先看这段）
 
 `gh` 装的是官方 **linux_arm64 静态包**，位置 `/root/tools/gh/bin/gh`；
 tar.gz 备份在技能目录 `vendor/` 下，重装后一条命令恢复，**不需要 apt、不需要联网**：
@@ -124,7 +187,7 @@ sh /sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh install
 为什么不用 apt：源里的版本通常落后好几条 minor（`--jq`/`--clobber` 行为会不一致），
 而且重装后得先把 apt 源修成国内镜像才能装。详见 `references/toolchain-gh.md`。
 
-## 4. 症状速查表
+## 5. 症状速查表
 
 | 症状 | 处理 |
 |---|---|
@@ -145,7 +208,7 @@ sh /sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh install
 
 更多分档（本地 / gh 自身 / 网络 / GitHub 侧 / 推完不对）见 `references/troubleshoot.md`。
 
-## 5. 边界（明确不做，避免误期待）
+## 6. 边界（明确不做，避免误期待）
 
 - **Projects（v2 看板）**：主走 GraphQL + node_id，成本远高于收益
 - Discussions、Sponsors、Packages、Org/Teams 批量成员管理
@@ -155,7 +218,7 @@ sh /sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh install
   可 `commit --amend --reset-author` 后覆盖一次；`repo` 子命令正常情况会自动改掉占位身份）
 - `gh auth login` 交互登录、浏览器 OAuth
 
-## 6. 参考文件（绝对路径，直接 read_file 打开）
+## 7. 参考文件（绝对路径，直接 read_file 打开）
 
 - `/sdcard/Download/Operit/skills/GitHub运维/references/toolchain-gh.md` —— gh 装哪、怎么装、怎么恢复、版本策略
 - `/sdcard/Download/Operit/skills/GitHub运维/references/fuse-git.md` —— FUSE 上 add 失败的根因、两条解法、实测基线
