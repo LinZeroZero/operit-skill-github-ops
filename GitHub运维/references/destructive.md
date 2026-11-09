@@ -15,10 +15,11 @@
 ```sh
 # ghlib.sh
 gate_confirm() {
-  _target=$1     # 实际目标
-  _given=$2      # 调用者复述
-  [ -z "$_given" ] && die5 "拒绝执行：这是破坏性操作（目标 $_target），需要 --confirm \"$_target\""
-  [ "$_target" = "$_given" ] || die5 "拒绝执行：--confirm 写的是「$_given」，实际目标是「$_target」"
+  _gc_target=$1   # 实际目标
+  _gc_given=$2    # 调用者复述（第二个位置参数，**不是** --confirm 开关）
+  [ -n "$_gc_target" ] || die1 "拒绝执行：闸门目标为空（缺少 id 或仓库名），不发起任何请求"
+  [ -z "$_gc_given" ] && die5 "拒绝执行：这是破坏性操作（目标：$_gc_target）。请把目标名原样再写一遍作为第二个参数"
+  [ "$_gc_target" = "$_gc_given" ] || die5 "拒绝执行：第二个参数写的是「$_gc_given」，实际目标是「$_gc_target」"
 }
 ```
 

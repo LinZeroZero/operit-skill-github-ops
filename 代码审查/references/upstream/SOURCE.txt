@@ -1,0 +1,28 @@
+上游底稿（镜像来源）
+====================
+
+仓库：https://github.com/awesome-skills/code-review-skill
+许可：MIT（全文见同目录 LICENSE-code-review-skill.txt）
+提交：4850184dfd7765ea7b3c5c4e9b6cf8e0815ee7cb
+
+镜像范围：reference/ 下 30 篇语言/主题档 + reference/cross-cutting/ 下 5 篇跨领域档。
+文件内容未做翻译或改写，保持上游原文（英文），仅本目录的 SOURCE.txt 与技能自带档为中文。
+
+为什么不逐篇改写
+----------------
+规则档是「引用证据」，不是「我写的结论」。原文保留才能：
+  1. 与本技能自研的 Android/Operit 三档区分责任边界；
+  2. 日后用 git diff 对比上游更新（见下）；
+  3. 避免改写过程中引入失真——审查结论要能被追溯。
+
+如何更新
+--------
+    TMP=$(mktemp -d)
+    git clone --depth 1 https://github.com/awesome-skills/code-review-skill "$TMP/cr"
+    diff -ru "$TMP/cr/reference" <技能目录>/references/upstream
+看完 diff 再按需覆盖，并把本文件顶部的提交号改成新 sha。
+
+未镜像的部分
+------------
+README.md / assets/ / scripts/pr-analyzer.py / index*.html：
+体积与本机栈无关，且 pr-analyzer.py 依赖 git diff 管线，非必需。

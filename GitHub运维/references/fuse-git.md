@@ -89,8 +89,8 @@ $G commit -m "..."
 ## 5. 自检清单
 
 ```sh
-stat -f -c %T "$DIR"                  # fuseblk/fuse* 才需要特殊处理
-git -C "$DIR" config core.createObject # 期望 rename
+stat -f -c %T "$DIR"                  # 只看一眼是什么文件系统（ghrepo.sh check 会打 FS=）
+git -C "$DIR" config core.createObject # 期望 rename（init 无条件写入，与文件系统类型无关）
 git -C "$DIR" count-objects -v | grep garbage   # 期望 0 或很小
 git -C "$DIR" fsck --no-progress      # 期望只报 unborn branch 之类 notice
 ```

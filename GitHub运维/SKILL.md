@@ -21,11 +21,13 @@ description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Rel
 
 1. **先 `sh ghenv.sh check`，再做任何事。** gh 不在或版本低于 2.45 时，
    PR/Issue/Actions/Gist 全部不可用——先修环境，别硬试。
-2. **项目在 `/sdcard` 下，建仓必须 `core.createObject rename`。**
-   不设的话 `git add` 报 `unable to write file .git/objects/xx/…: No such file or directory`，
+2. **建仓必须 `core.createObject rename`。** `ghrepo.sh init` 会**无条件**写入这一项
+   （不再靠探测文件系统类型决定要不要写），你手工建仓时也必须自己设。不设的话
+   `git add` 报 `unable to write file .git/objects/xx/…: No such file or directory`，
    **报错路径看着像不存在，其实目录是好的**。根因见 `references/fuse-git.md`。
-3. **令牌只从 `GH_TOKEN` 环境变量读，绝不落盘。** 不写 remote URL、不写 `~/.git-credentials`、
-   不写 `~/.config/gh/hosts.yml`、不 echo 进日志。用完 `unset`。
+3. **令牌只从 `GH_TOKEN` 环境变量读：不落盘、也不进 argv。** 不写 remote URL、
+   不写 `~/.git-credentials`、不写 `~/.config/gh/hosts.yml`、不 echo 进日志。
+   `push` 靠 `GIT_ASKPASS` 把令牌交给 git，所以 `ps` 与命令行里都看不到它。用完 `unset`。
 4. **大仓库分批推；破坏性操作要复述目标。**
    手机上一次推 2 万文件/200 MB，断网就得从头来；分批后已完成批次不用重来。
    删仓库/删 Gist 必须把目标名再写一遍（`gate_confirm`），不一致直接退出码 5。
@@ -106,6 +108,8 @@ A="/sdcard/Download/Operit/skills/GitHub运维/scripts/ghadm.sh"
 | **删 Gist** | `sh "$A" gist-delete <id> <id>` ← 同上 |
 
 细节：删除仓库需要令牌额外带 `delete_repo` scope，只勾 `repo` 会 403。
+`issue-create` 的标签由 GitHub 自己创建——**标签名拼错不会报错**，只会静默多出一个新标签
+（实测确认，见 `references/gh-json-fields.md` §3）。
 完整矩阵见 `references/destructive.md`。
 
 ## 3. gh 环境（重装 proot 之后先看这段）
@@ -128,14 +132,15 @@ sh /sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh install
 | `detected dubious ownership` | `git config --global --add safe.directory '*'`（脚本 init 已自动登记两种路径写法） |
 | 脚本退出码 2、报没有 gh | `sh ghenv.sh install`（离线解压 vendor 包） |
 | 脚本退出码 3 | 令牌无效/权限不足，换令牌；删仓库还要 `delete_repo` |
-| 脚本退出码 5 | 破坏性操作没复述目标，按提示把目标名再写一遍 |
+| 脚本退出码 5 | 破坏性操作没复述目标，按提示把目标名再写一遍（第二个参数，不是 `--confirm` 开关） |
+| `HTTP 422` / `Validation Failed` | 退出码 **1**：参数或预条件冲突（名字非法、tag 已存在、字段不合法），不是网络问题 |
 | `HTTP 404` 但网页有这仓库 | 私有仓库对无权令牌返回 404，是权限问题不是不存在 |
 | `Recv failure` / `HTTP 502` / push 卡住 | 降 HTTP/1.1、加 postBuffer、走本机代理，重跑可续传 |
 | `remote: File … exceeds 100.00 MB` | 该文件超硬上限，移出仓库或改 LFS（本技能不含 LFS） |
 | `non-fast-forward` / `fetch first` | 先 `git pull --rebase`，不要 `push -f` |
 | 推送后文件数对不上 | `git check-ignore -v <path>` 看 `.gitignore` |
-| 发 Release 报 `already_exists` | 同 tag 只能一个 Release，改用 `republish` |
-| 命令卡住无输出 | gh 想开编辑器/分页器；本技能已强制非交互，手敲时加 `GH_PAGER=cat` 与 `--body ""` |
+| 发 Release 报 `already_exists` | 退出码 1；同 tag 只能一个 Release，改用 `republish` |
+| 命令卡住无输出 | gh 想开编辑器/分页器。本技能已 export `GH_PROMPT_DISABLED=1`、`GIT_EDITOR=true`、`GIT_TERMINAL_PROMPT=0`、`*_PAGER=cat`（`ghrepo.sh doctor` 的 `NOINTERACT=` 一行可自检）；手敲 gh 时也得自己加 |
 | 刚创建的 issue/PR 立刻 list 查不到 | 列表接口有秒级最终一致性延迟，看创建返回的编号，或隔几秒再查 |
 
 更多分档（本地 / gh 自身 / 网络 / GitHub 侧 / 推完不对）见 `references/troubleshoot.md`。

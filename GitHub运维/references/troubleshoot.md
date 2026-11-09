@@ -3,7 +3,7 @@
 绝对路径：`/sdcard/Download/Operit/skills/GitHub运维/references/troubleshoot.md`
 
 先记住退出码，能省一半排查时间：
-`1` 用法错 · `2` 环境（无 gh / 目录不存在 / 不是仓库）· `3` 令牌 · `4` 网络或远端 · `5` 闸门未过。
+`1` 用法错或参数/预条件冲突 · `2` 环境（无 gh / 目录不存在 / 不是仓库）· `3` 令牌 · `4` 网络或远端 · `5` 闸门未过。
 
 ## A. 本地（git 与文件系统）
 
@@ -66,7 +66,10 @@ find "$DIR/.git/objects" -name '.l2s.tmp_obj_*' -delete
 ### 命令「卡住不动」，没有任何输出
 **原因**：gh 试图打开编辑器或分页器。手机终端没有可用 `$EDITOR`，于是无限等待。
 **处理**：会写正文的命令必须给全参数（`pr-create` 的标题+正文、`pr-merge` 的合并方式）。
-本技能所有脚本已强制非交互；自己手敲 gh 时记得加 `GH_PAGER=cat` 与 `--body ""`。
+本技能脚本已 export `GH_PROMPT_DISABLED=1`、`GIT_EDITOR=true`、`EDITOR=true`、
+`GIT_TERMINAL_PROMPT=0`、`GH_PAGER/PAGER/GIT_PAGER=cat`，需要交互时 gh 会直接报错而不是等输入；
+`sh ghrepo.sh doctor <DIR>` 的 `NOINTERACT=` 行可以自检这些值是否生效。
+自己手敲 gh 时同样要带上这些，并给全 `--body ""`。
 
 ### `unknown flag: --secret`（gh gist create）
 **原因**：`gh gist create` 没有 `--secret`。gist **默认就是 secret**。
@@ -137,6 +140,7 @@ git -C "$DIR" ls-remote origin           # 看远端到底有没有这个提交�
 
 ### 发 Release 报 `422 Validation Failed / already_exists / tag_name`
 **原因**：同一个 tag 只能挂一个 Release，仓库里已有 `v1.0` 之类的 Release。
+注意退出码是 **1**（参数/预条件冲突），不是 4——看到 1 不要往网络上查。
 **处理**：换 tag，或用 `sh ghrepo.sh republish`（原位替换资产 + 更新说明）。
 
 ### 上传资产报 `422 already_exists`（同名资产重复）

@@ -16,7 +16,7 @@
 #       /sdcard 是 noexec 挂载，所以只能 `sh <此文件>` 调用，不能直接执行。
 #
 # 对外契约（文档与对话都按这个写，改之前先想清谁依赖它）：
-#   退出码  0=成功 1=用法 2=环境 3=令牌 4=网络/远端 5=闸门未通过
+#   退出码  0=成功 1=用法或参数/预条件冲突 2=环境 3=令牌 4=网络/远端 5=闸门未通过
 #   repo       输出 LOGIN= / REPO_URL= / CREATED=yes|no
 #   push       输出 BRANCH= / PUSHED=<短提交号>
 #   release    输出 TAG= / RELEASE_URL= / ASSET_URL= / ASSET_SIZE=
@@ -24,9 +24,13 @@
 #   check / doctor / assets 只读，不做任何写操作
 #
 # 三条不变的硬约束（换实现也不能丢）：
-#   1. FUSE 上必须 core.createObject=rename，否则 git add 必失败（见 references/fuse-git.md）
-#   2. 令牌只在环境变量里，remote URL 与 .git/config 永不残留凭据
-#   3. 不 force push、不删远端、不改写历史（唯一例外见 SKILL.md）
+#   1. FUSE 上必须 core.createObject=rename。本脚本**无条件**设置它：
+#      不再用 stat 探测文件系统类型——探测一旦失手就等于把开关关掉，
+#      而症状是「git add 报 No such file or directory，但目录是好的」，极难自查。
+#   2. 令牌只在环境变量里，不出现在 argv / remote URL / .git/config。
+#      push 靠 GIT_ASKPASS 把令牌交给 git，所以 ps 里看不到它（早期版本曾把令牌
+#      拼进一次性 URL 当参数传，与本条冲突，已改）。
+#   3. 不 force push、不删远端、不改写历史（唯一例外见 SKILL.md）。
 
 set +e
 
@@ -40,72 +44,107 @@ usage() {
   check   <DIR>                    只读体检：体积/文件数/大文件/连通性/仓库状态
   init    <DIR>                    建仓（已存在则复用）并写入本环境必需的 config
   stage   <DIR> [路径...]          git add（省略路径 = 全部）；大仓库按批传路径
-  commit  <DIR> "<提交说明>"        提交已 staged 的内容
+  commit  <DIR> "<提交说明>"        提交已 staged 的内容（无暂存内容时输出 NOTHING_TO_COMMIT）
   repo    <DIR> <仓库名> [private|public]
                                    建远端仓库（已存在则复用）、设 origin、校正提交身份
-  push    <DIR>                    推送当前分支（令牌取自 GH_TOKEN 环境变量）
+  push    <DIR>                    推送当前分支（令牌取自 GH_TOKEN 环境变量，不进 argv）
   release <DIR> <TAG> <标题> <资产文件> [说明.md]
-                                   建 Release 并上传资产（APK 等）；说明缺省用最近提交
+                                   建 Release 并上传资产（APK 等）
   republish <DIR> <TAG> <标题> <资产文件> [说明.md]
                                    已有 Release 上同名覆盖资产并更新说明（tag 不变）
   assets  <DIR> <TAG>              列出该 Release 的资产（TSV：name size url）
   doctor  <DIR>                    诊断：fs 类型、createObject、safe.directory、origin、大文件
   help                             本说明
 
-退出码: 0 成功 / 1 用法 / 2 环境 / 3 令牌 / 4 网络或远端 / 5 闸门未通过
+说明文件 [说明.md] 省略时自动生成「构建自 <短提交号> + 最近提交标题」；
+给了却不存在会直接报错（退出码 2），不会静默改用自动说明。
+
+退出码: 0 成功 / 1 用法或参数/预条件冲突 / 2 环境 / 3 令牌 / 4 网络或远端 / 5 闸门未通过
 令牌: export GH_TOKEN=ghp_xxx   （只在环境变量里出现，不写文件、不进命令行）
 EOF
 }
 
 # ---- 环境探测 ---------------------------------------------------------------
 
-fs_type() { stat -f -c %T "$1" 2>/dev/null || echo unknown; }
-is_fuse() { case "$(fs_type "$1")" in fuse*|fuseblk*) return 0 ;; esac; return 1; }
+# 文件系统类型：**只用于展示，不参与任何判定**。
+# 为什么：早期版本用它决定要不要写 core.createObject，于是「探测失手」=
+# 「FUSE 生死开关被关掉」，而症状（git add 报路径不存在但目录完好）极难自查。
+fs_type() {
+  _fs=$(stat -f -c %T "$1" 2>/dev/null)
+  case "$_fs" in ''|%T) _fs= ;; esac          # 不认识的转义符会被原样吐出 %T
+  [ -n "$_fs" ] || _fs=$(df -T "$1" 2>/dev/null | awk 'NR==2{print $2}')
+  [ -n "$_fs" ] || _fs=unknown
+  printf '%s' "$_fs"
+}
 
-# 说明文件缺省值：不给就退回「构建自 <短提交号> + 最近提交标题」，保证 Release 不是白板
+# 说明文件缺省值：不给就退回「构建自 <短提交号> + 最近提交标题」，保证 Release 不是白板。
+# 空仓库（还没提交）也要能写出东西，否则建 Release 时会得到一个空说明文件。
 write_notes() {
-  _dir=$1
-  _out=$2
-  printf '构建自提交 `%s`\n\n%s\n' "$(git -C "$_dir" rev-parse --short HEAD)" \
-    "$(git -C "$_dir" log -1 --format=%s)" > "$_out"
+  _wn_dir=$1
+  _wn_out=$2
+  _wn_sha=$(git -C "$_wn_dir" rev-parse --short HEAD 2>/dev/null)
+  _wn_sub=$(git -C "$_wn_dir" log -1 --format=%s 2>/dev/null)
+  [ -n "$_wn_sha" ] || _wn_sha=none
+  [ -n "$_wn_sub" ] || _wn_sub="（还没有提交）"
+  printf '构建自提交 `%s`\n\n%s\n' "$_wn_sha" "$_wn_sub" > "$_wn_out"
 }
 
 # ---- 只读体检 ---------------------------------------------------------------
 
 cmd_check() {
   DIR=$1; need_dir "$DIR"; need_git
-  kv DIR "$DIR"
-  kv FS "$(fs_type "$DIR")"
+  DIRABS=$(norm_dir "$DIR" 2>/dev/null) || DIRABS=$DIR
+  kv DIR "$DIRABS"
+  kv FS "$(fs_type "$DIRABS")"
   kv GIT "$(git --version 2>/dev/null)"
-  # 体积与文件数排除 .git，否则仓库建好之后这两个数字会一路虚高
-  kv SIZE "$(du -sh --exclude=.git "$DIR" 2>/dev/null | cut -f1)"
-  kv FILES "$(find "$DIR" -path "$DIR/.git" -prune -o -type f -print 2>/dev/null | wc -l)"
-  echo "-- >40MB 的文件（GitHub 50MB 警告 / 100MB 硬上限）--"
-  find "$DIR" -type f -size +40M 2>/dev/null | head -10
-  echo "-- 连通性 --"
-  # 这一条刻意保留 curl 而不是 gh：它要能在「gh 没装」时仍然回答「网络到底通不通」，
+
+  # 体积与文件数都排除 .git，否则仓库建好之后这两个数字会一路虚高，失去「推送前预估」的意义。
+  # 算法是「总量减 .git 量」而不是 du --exclude：后者是 GNU 扩展，toybox 上不存在。
+  _ck_all=$(du -sk "$DIRABS" 2>/dev/null | cut -f1)
+  _ck_git=$(du -sk "$DIRABS/.git" 2>/dev/null | cut -f1)
+  case "$_ck_all" in ''|*[!0-9]*) _ck_all=0 ;; esac
+  case "$_ck_git" in ''|*[!0-9]*) _ck_git=0 ;; esac
+  kv SIZE_TOTAL_KB "$_ck_all"
+  kv SIZE_KB "$(( _ck_all - _ck_git ))"
+  kv FILES "$(find "$DIRABS" -path "$DIRABS/.git" -prune -o -type f -print 2>/dev/null | wc -l | tr -d ' ')"
+
+  sec ">40MB 的文件（GitHub 50MB 警告 / 100MB 硬上限）"
+  find "$DIRABS" -path "$DIRABS/.git" -prune -o -type f -size +40M -print 2>/dev/null | head -10
+
+  sec "连通性"
+  # 这条刻意保留 curl 而不是 gh：它要能在「gh 没装」时仍然回答「网络到底通不通」，
   # 否则排查顺序会变成先修 gh 再验网络，白绕一圈。
-  kv GITHUB_HTTP "$(curl -s -o /dev/null -w '%{http_code}' -m 15 https://github.com/ 2>/dev/null)"
-  if _b=$(gh_bin); then
-    GH=$_b; export GH
+  if need_curl; then
+    _ck_code=$(curl -s -o /dev/null -w '%{http_code}' -m 15 https://github.com/ 2>/dev/null)
+    kv GITHUB_HTTP "${_ck_code:-000}"
+    case "$_ck_code" in
+      000|'') kv GITHUB_HTTP_NOTE "无响应（DNS/代理/跨境链路），见 references/troubleshoot.md C 段" ;;
+    esac
+  else
+    kv GITHUB_HTTP "absent（没装 curl）"
+  fi
+  if _cb=$(gh_bin); then
+    GH=$_cb; export GH
     kv GH "$(gh_version)"
+    if [ -n "$GH_TOKEN" ]; then
+      # 带令牌时读的是真实额度，比 HTTP 状态码可靠
+      _ck_rem=$("$GH" api rate_limit --jq .rate.remaining 2>/dev/null)
+      kv API_REMAINING "${_ck_rem:-unknown}"
+    else
+      kv API_REMAINING "unknown（未提供令牌）"
+    fi
   else
     kv GH absent
-  fi
-  if [ -n "$GH_TOKEN" ] && [ -n "${GH:-}" ]; then
-    # 带令牌时读的是真实额度，比 HTTP 状态码可靠：403 常常只是未认证额度用尽
-    _rem=$("$GH" api rate_limit --jq .rate.remaining 2>/dev/null)
-    kv API_REMAINING "${_rem:-unknown}"
-  else
     kv API_REMAINING "unknown（未提供令牌）"
   fi
-  echo "-- 仓库状态 --"
-  if git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
+
+  sec "仓库状态"
+  if git -C "$DIRABS" rev-parse --git-dir >/dev/null 2>&1; then
     kv REPO yes
-    kv BRANCH "$(git -C "$DIR" symbolic-ref --short HEAD 2>/dev/null)"
-    kv ORIGIN "$(git -C "$DIR" remote get-url origin 2>/dev/null)"
-    kv TRACKED "$(git -C "$DIR" ls-files | wc -l)"
-    kv CREATEOBJECT "$(git -C "$DIR" config core.createObject 2>/dev/null)"
+    kv BRANCH "$(git -C "$DIRABS" symbolic-ref --short HEAD 2>/dev/null)"
+    kv ORIGIN "$(git -C "$DIRABS" remote get-url origin 2>/dev/null)"
+    kv TRACKED "$(git -C "$DIRABS" ls-files | wc -l | tr -d ' ')"
+    kv CREATEOBJECT "$(git -C "$DIRABS" config core.createObject 2>/dev/null)"
   else
     kv REPO no
   fi
@@ -115,12 +154,14 @@ cmd_check() {
 
 cmd_init() {
   DIR=$1; need_dir "$DIR"; need_git
+  DIRABS=$(norm_dir "$DIR" 2>/dev/null) || DIRABS=$DIR
 
   # safe.directory 必须登记：git 比较的是 realpath，/storage/emulated/0/… 与 /sdcard/…
-  # 会解析成同一处但字符串不同，两个写法都登记才不会被判 dubious ownership。
-  for d in "$DIR" "$(cd "$DIR" && pwd -P 2>/dev/null)"; do
+  # 会解析成同一处但字符串不同，两种写法都登记才不会被判 dubious ownership。
+  # 去重用 grep -F：路径里的 . 与 - 在正则下含义不同，按正则匹配会误判。
+  for d in "$DIR" "$DIRABS"; do
     [ -n "$d" ] || continue
-    if ! git config --global --get-all safe.directory 2>/dev/null | grep -qx "$d"; then
+    if ! git config --global --get-all safe.directory 2>/dev/null | grep -Fqx "$d"; then
       git config --global --add safe.directory "$d" && kv SAFE_ADDED "$d"
     fi
   done
@@ -128,15 +169,21 @@ cmd_init() {
   if git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
     kv INIT reused
   else
-    git -C "$DIR" init -q -b main || die2 "git init 失败: $DIR"
+    if ! git -C "$DIR" init -q -b main 2>/dev/null; then
+      # git < 2.28 没有 -b：退化成 init + 改 HEAD，而不是把老 git 直接判成环境错误
+      git -C "$DIR" init -q || die2 "git init 失败: $DIR"
+      git -C "$DIR" symbolic-ref HEAD refs/heads/main || die2 "无法把默认分支设为 main: $DIR"
+    fi
     kv INIT yes
   fi
 
-  # FUSE 上的生死开关：不设 rename，add 一定失败（见文件头约束 1）
-  if is_fuse "$DIR"; then
-    git -C "$DIR" config core.createObject rename
-    kv CREATEOBJECT rename
-  fi
+  # FUSE 上的生死开关。为什么无条件设置、不再先探测文件系统类型：
+  #   rename 在 ext4/f2fs/FUSE 上都合法且原子，设了没有副作用；
+  #   而「探测失败就不设」的代价是 git add 报
+  #   「unable to write file .git/objects/xx/…: No such file or directory」——
+  #   报错路径看着不存在但目录其实完好，属于最难自查的一类症状。
+  git -C "$DIR" config core.createObject rename
+  kv CREATEOBJECT rename
   git -C "$DIR" config core.fileMode false       # FUSE 不提供可信权限位，否则满屏 mode 变更
   git -C "$DIR" config core.autocrlf false
   git -C "$DIR" config http.postBuffer 524288000 # 默认 1MB，大仓库 push 会频繁中断
@@ -157,12 +204,13 @@ cmd_stage() {
   DIR=$1; shift
   need_dir "$DIR"; need_repo "$DIR"
   [ $# -eq 0 ] && set -- .
-  _tmp=$(mktemp)
-  git -C "$DIR" add -A "$@" >"$_tmp" 2>&1
-  _rc=$?
-  tail -6 "$_tmp"; rm -f "$_tmp"
-  [ "$_rc" -eq 0 ] || die2 "git add 失败（FUSE 上多半是没设 core.createObject=rename）"
-  kv STAGED "$(git -C "$DIR" diff --cached --name-only | wc -l)"
+  _st_tmp=$(mktemp)
+  # `--` 不能省：路径以 - 开头时，没有它会被 git 当成选项解析
+  git -C "$DIR" add -A -- "$@" >"$_st_tmp" 2>&1
+  _st_rc=$?
+  tail -6 "$_st_tmp"; rm -f "$_st_tmp"
+  [ "$_st_rc" -eq 0 ] || die2 "git add 失败（FUSE 上多半是没设 core.createObject=rename）"
+  kv STAGED "$(git -C "$DIR" diff --cached --name-only | wc -l | tr -d ' ')"
 }
 
 cmd_commit() {
@@ -174,11 +222,15 @@ cmd_commit() {
     echo "OK"
     return 0
   fi
-  _tmp=$(mktemp)
-  git -C "$DIR" commit -q -m "$MSG" >"$_tmp" 2>&1
-  _rc=$?
-  tail -6 "$_tmp"; rm -f "$_tmp"
-  [ "$_rc" -eq 0 ] || die2 "commit 失败"
+  # 身份缺失时 git 只会说 "Please tell me who you are"，对不熟 git 的人等于没说
+  if [ -z "$(git -C "$DIR" config user.email 2>/dev/null)" ]; then
+    die2 "该仓库没有提交身份：先跑 init 子命令，或 git -C \"$DIR\" config user.name / user.email"
+  fi
+  _cm_tmp=$(mktemp)
+  git -C "$DIR" commit -q -m "$MSG" >"$_cm_tmp" 2>&1
+  _cm_rc=$?
+  tail -6 "$_cm_tmp"; rm -f "$_cm_tmp"
+  [ "$_cm_rc" -eq 0 ] || die2 "commit 失败"
   kv COMMIT "$(git -C "$DIR" rev-parse --short HEAD)"
 }
 
@@ -188,8 +240,14 @@ cmd_repo() {
   [ $# -ge 2 ] || die1 "用法: sh $PROG repo <DIR> <仓库名> [private|public]"
   DIR=$1; NAME=$2; VIS=${3:-private}
   need_dir "$DIR"; need_repo "$DIR"; need_gh; need_token
+  case "$VIS" in
+    public)  PRIV=false ;;
+    private) PRIV=true ;;
+    *)       die1 "可见性只能是 public 或 private，收到：$VIS" ;;
+  esac
 
-  LOGIN=$(gh_login) || die3 "令牌无效或网络不通（取不到 /user；检查令牌是否过期、是否含 repo 权限）"
+  gh_login_resolve || die3 "令牌无效或网络不通（取不到 /user；检查令牌是否过期、是否含 repo 权限）"
+  LOGIN=$GH_LOGIN
   kv LOGIN "$LOGIN"
   SLUG="$LOGIN/$NAME"
 
@@ -199,16 +257,12 @@ cmd_repo() {
   else
     # 刻意不用 `gh repo create`：它的 flag 集合随版本增删，而这里要精确控制
     # has_wiki=false / has_issues=true；REST 字段是固定的，不会漂移。
-    case "$VIS" in
-      public) _priv=false ;;
-      *)      _priv=true ;;
-    esac
-    ghrun api -X POST user/repos -f "name=$NAME" -F "private=$_priv" \
+    ghrun api -X POST user/repos -f "name=$NAME" -F "private=$PRIV" \
       -F has_issues=true -F has_wiki=false >/dev/null
     CREATED=yes
   fi
 
-  # origin 用不含令牌的地址，令牌只在 push 时以一次性 URL 传入
+  # origin 用不含令牌的地址，令牌只在 push 时通过 GIT_ASKPASS 交给 git
   git -C "$DIR" remote remove origin >/dev/null 2>&1
   git -C "$DIR" remote add origin "https://github.com/$SLUG.git"
   git -C "$DIR" config user.name "$LOGIN"
@@ -216,8 +270,8 @@ cmd_repo() {
 
   # 若首个提交是在 init 的占位身份下做的，这里顺手改成本人（此时还没推送，改写历史无风险）
   if git -C "$DIR" rev-parse HEAD >/dev/null 2>&1; then
-    _ae=$(git -C "$DIR" log -1 --format=%ae)
-    if printf '%s' "$_ae" | grep -qE '^operit(-push)?@users\.noreply\.github\.com$'; then
+    _rp_ae=$(git -C "$DIR" log -1 --format=%ae)
+    if printf '%s' "$_rp_ae" | grep -qE '^operit(-push)?@users\.noreply\.github\.com$'; then
       if git -C "$DIR" commit --amend --reset-author --no-edit >/dev/null 2>&1; then
         kv AUTHOR_FIXED "$(git -C "$DIR" log -1 --format=%ae)"
       fi
@@ -236,20 +290,44 @@ cmd_push() {
   ORIGIN=$(git -C "$DIR" remote get-url origin 2>/dev/null)
   [ -n "$ORIGIN" ] || die2 "还没设 origin（先跑 repo 子命令）"
 
-  # 支持 https://github.com/u/r.git 与 git@github.com:u/r.git 两种 origin 写法
-  HOSTPATH=$(printf '%s' "$ORIGIN" | sed -e 's#^https://##' -e 's#^git@##' -e 's#:#/#' -e 's#/$##')
-  AUTHURL="https://x-access-token:$GH_TOKEN@$HOSTPATH"
+  # 令牌不进 argv。做法是 GIT_ASKPASS：git 需要凭据时会反向执行这个脚本，
+  # 脚本里只有 "$GH_TOKEN"，令牌本身从不落盘。
+  # （早期版本把令牌拼进 https://x-access-token:TOKEN@host/... 当参数传，
+  #   令牌会出现在 git 子进程的 argv 里，与「只走环境变量」的规则冲突。）
+  _pu_ap=$(mktemp) || die2 "mktemp 失败"
+  cat >"$_pu_ap" <<'ASKPASS'
+#!/bin/sh
+# git 的 GIT_ASKPASS 协议：$1 是提示语。按提示语区分「要用户名」还是「要口令」。
+case "$1" in
+  *sername*|*Sername*) printf '%s\n' "x-access-token" ;;
+  *) printf '%s\n' "$GH_TOKEN" ;;
+esac
+ASKPASS
+  chmod 700 "$_pu_ap" 2>/dev/null
 
   kv BRANCH "$BR"
   kv PUSH_START "$(date +%T)"
-  _tmp=$(mktemp)
-  GIT_TERMINAL_PROMPT=0 git -C "$DIR" -c credential.helper= \
-    push "$AUTHURL" "HEAD:refs/heads/$BR" >"$_tmp" 2>&1
-  _rc=$?
-  # 输出里可能出现带令牌的 URL，统一把 userinfo 段打码再展示
-  tail -15 "$_tmp" | sed -e 's#//[^@/]*@#//***@#g'
-  rm -f "$_tmp"
-  [ "$_rc" -eq 0 ] || die4 "push 失败（rc=$_rc；网络/代理/令牌/大文件都可能是原因，见 references/troubleshoot.md）"
+  _pu_tmp=$(mktemp)
+  GIT_ASKPASS="$_pu_ap" git -C "$DIR" -c credential.helper= \
+    push origin "HEAD:refs/heads/$BR" >"$_pu_tmp" 2>&1
+  _pu_rc=$?
+  # 输出里理论上已无令牌；保留打码只作为兜底（宁可多打一层，也不要漏打印）
+  tail -15 "$_pu_tmp" | sed -e 's#//[^@/]*@#//***@#g'
+  rm -f "$_pu_tmp"
+  if [ "$_pu_rc" -ne 0 ]; then
+    rm -f "$_pu_ap"
+    die4 "push 失败（rc=$_pu_rc；网络/代理/令牌/大文件都可能是原因，见 references/troubleshoot.md）"
+  fi
+
+  # 补远端跟踪引用。用不带令牌的 origin 推完，refs/remotes/origin/$BR 并不会自动更新，
+  # 之后 git status / branch -vv 会显示 upstream gone（假象，会被人当成「推失败了」）。
+  if GIT_ASKPASS="$_pu_ap" git -C "$DIR" -c credential.helper= \
+       fetch -q origin "+refs/heads/$BR:refs/remotes/origin/$BR" 2>/dev/null; then
+    :
+  else
+    warn "远端跟踪引用 origin/$BR 未更新（不影响远端内容，只影响 git status 的显示）"
+  fi
+  rm -f "$_pu_ap"
 
   # 上游指向不含令牌的 origin，之后 git status 才有对比基准
   git -C "$DIR" config "branch.$BR.remote" origin
@@ -264,6 +342,36 @@ cmd_push() {
 # Release = 「发布包」：push 只把源码放进仓库，Release 才会在仓库右侧出现可下载的资产。
 # 本功能用的 gh 命令刻意只覆盖「创建/上传」，所有读取一律走 gh api：
 # REST 字段名固定，而 gh 的 --json 字段集随版本变（见 references/gh-json-fields.md）。
+
+# 说明文件解析：给了就必须存在。静默回退到自动说明是最坏的一种「成功」——
+# 用户以为自己写的发布说明已经挂上去，直到有人在网页上看到「构建自 xxxx」。
+resolve_notes() {
+  _rn_given=$1
+  _rn_dir=$2
+  TMPN=
+  if [ -n "$_rn_given" ]; then
+    [ -f "$_rn_given" ] || die2 "说明文件不存在: $_rn_given（想用自动生成的说明就别传这个参数）"
+    SRC=$_rn_given
+  else
+    SRC=$(mktemp) || die2 "mktemp 失败"
+    TMPN=$SRC
+    write_notes "$_rn_dir" "$SRC"
+  fi
+}
+
+# 回读资产：上传成功与否不能只看 gh 的退出码——中断时它可能 0 退出但只传了一半，
+# 所以以「服务端最终资产大小」为准。
+read_asset() {
+  _ra_slug=$1
+  _ra_tag=$2
+  _ra_name=$(basename "$3")
+  _ra_row=$("$GH" api "repos/$_ra_slug/releases/tags/$_ra_tag" \
+    --jq ".assets[] | select(.name==\"$_ra_name\") | \"\(.size)\t\(.browser_download_url)\"" 2>/dev/null)
+  # 字段分隔用的是 jq 里的 \t（真 tab），下面按 tab 切
+  ASSET_SIZE=${_ra_row%%	*}
+  ASSET_URL=${_ra_row#*	}
+}
+
 cmd_release() {
   [ $# -ge 4 ] || die1 "用法: sh $PROG release <DIR> <TAG> <标题> <资产文件> [说明.md]"
   DIR=$1; TAG=$2; TITLE=$3; ASSET=$4; NOTES=${5:-}
@@ -273,23 +381,19 @@ cmd_release() {
   [ -n "$ORIGIN" ] || die2 "还没设 origin（先跑 repo 子命令）"
   SLUG=$(slug_of "$ORIGIN")
   BR=$(git -C "$DIR" symbolic-ref --short HEAD 2>/dev/null)
+  # detached HEAD 时 --target 会拿到空串，报错信息还指向 --target，容易误判成 tag 问题
+  [ -n "$BR" ] || die2 "拿不到当前分支（detached HEAD？先 git switch main）"
 
   # 一个 tag 只能挂一个 Release：先探明再动作，避免「建到一半 422」这种半成品状态
   if gh_try release view "$TAG" -R "$SLUG" >/dev/null 2>&1; then
-    die4 "tag $TAG 的 Release 已存在：换个 tag，或改用 republish 原位替换"
+    die1 "tag $TAG 的 Release 已存在：换个 tag，或改用 republish 原位替换"
   fi
 
-  TMPN=""
-  if [ -n "$NOTES" ] && [ -f "$NOTES" ]; then
-    SRC=$NOTES
-  else
-    SRC=$(mktemp); TMPN=$SRC
-    write_notes "$DIR" "$SRC"
-  fi
+  resolve_notes "$NOTES" "$DIR"
 
-  # 建 Release 与上传资产分两步：合并成一条命令时，失败分不清是 tag 冲突还是上传中断
+  # 建 Release 与上传资产分两步：合并成一条命令时，失败分不清是 tag 冲突还是上传中断。
   # 注意 `|| exit $?`：ghrun 内部是 exit，而它在 $(...) 子 shell 里运行，
-  # 不显式转发退出码的话父脚本会带着空值继续往下走（打印空的 RELEASE_URL= 与 OK）
+  # 不显式转发退出码的话父脚本会带着空值继续往下走（打印空的 RELEASE_URL= 与 OK）。
   RELEASE_URL=$(ghrun release create "$TAG" -R "$SLUG" --title "$TITLE" \
     --notes-file "$SRC" --target "$BR") || exit $?
   [ -n "$TMPN" ] && rm -f "$TMPN"
@@ -298,21 +402,18 @@ cmd_release() {
   ghrun release upload "$TAG" "$ASSET" -R "$SLUG" --clobber >/dev/null
   kv UPLOAD_END "$(date +%T)"
 
-  _row=$("$GH" api "repos/$SLUG/releases/tags/$TAG" \
-    --jq ".assets[] | select(.name==\"$(basename "$ASSET")\") | \"\(.size)\t\(.browser_download_url)\"" 2>/dev/null)
-  [ -n "$_row" ] || die4 "上传后回读不到资产（上传可能被中断，重跑 republish 即可）"
-  _size=${_row%%	*}
-  _url=${_row#*	}
+  read_asset "$SLUG" "$TAG" "$ASSET"
+  [ -n "$ASSET_URL" ] || die4 "上传后回读不到资产（上传可能被中断，重跑 republish 即可）"
 
   kv TAG "$TAG"
   kv RELEASE_URL "$RELEASE_URL"
-  kv ASSET_URL "$_url"
-  kv ASSET_SIZE "$_size"
+  kv ASSET_URL "$ASSET_URL"
+  kv ASSET_SIZE "$ASSET_SIZE"
   echo "OK"
 }
 
 # republish = 在已有 Release 上「重新发布一版」，tag 不变。
-# 与 release 的区别：release 撞 tag 会 422，republish 是原位更新。
+# 与 release 的区别：release 撞 tag 会报错（退出码 1），republish 是原位更新。
 # 换 gh 之后的实质改进：--clobber 让同名资产原地覆盖，不需要「先删后传」，
 # 因此旧下载链接依然有效（老实现是先删再传，旧文件名一律 404）。
 cmd_republish() {
@@ -330,13 +431,7 @@ cmd_republish() {
     return $?
   fi
 
-  TMPN=""
-  if [ -n "$NOTES" ] && [ -f "$NOTES" ]; then
-    SRC=$NOTES
-  else
-    SRC=$(mktemp); TMPN=$SRC
-    write_notes "$DIR" "$SRC"
-  fi
+  resolve_notes "$NOTES" "$DIR"
 
   # 先改元信息再传包：万一上传中断，标题/说明已经是对的，重跑一次即可
   ghrun release edit "$TAG" -R "$SLUG" --title "$TITLE" --notes-file "$SRC" >/dev/null
@@ -346,18 +441,15 @@ cmd_republish() {
   ghrun release upload "$TAG" "$ASSET" -R "$SLUG" --clobber >/dev/null
   kv UPLOAD_END "$(date +%T)"
 
-  _row=$("$GH" api "repos/$SLUG/releases/tags/$TAG" \
-    --jq ".assets[] | select(.name==\"$(basename "$ASSET")\") | \"\(.size)\t\(.browser_download_url)\"" 2>/dev/null)
-  [ -n "$_row" ] || die4 "上传后回读不到资产（上传可能被中断，重跑一次即可）"
-  _size=${_row%%	*}
-  _url=${_row#*	}
+  read_asset "$SLUG" "$TAG" "$ASSET"
+  [ -n "$ASSET_URL" ] || die4 "上传后回读不到资产（上传可能被中断，重跑一次即可）"
 
-  _html=$("$GH" api "repos/$SLUG/releases/tags/$TAG" --jq .html_url 2>/dev/null)
+  _rb_html=$("$GH" api "repos/$SLUG/releases/tags/$TAG" --jq .html_url 2>/dev/null)
 
   kv TAG "$TAG"
-  kv RELEASE_URL "$_html"
-  kv ASSET_URL "$_url"
-  kv ASSET_SIZE "$_size"
+  kv RELEASE_URL "$_rb_html"
+  kv ASSET_URL "$ASSET_URL"
+  kv ASSET_SIZE "$ASSET_SIZE"
   kv ASSET_MODE "clobber（同名原位覆盖，旧链接仍有效）"
   echo "OK"
 }
@@ -370,7 +462,7 @@ cmd_assets() {
   ORIGIN=$(git -C "$DIR" remote get-url origin 2>/dev/null)
   [ -n "$ORIGIN" ] || die2 "还没设 origin"
   SLUG=$(slug_of "$ORIGIN")
-  tsv_header "name size url"
+  tsv_header name size url
   "$GH" api "repos/$SLUG/releases/tags/$TAG" \
     --jq '.assets[] | "\(.name)\t\(.size)\t\(.browser_download_url)"' 2>/dev/null \
     || die4 "读取资产失败（tag 不存在，或令牌无权访问）"
@@ -378,52 +470,54 @@ cmd_assets() {
 
 cmd_doctor() {
   DIR=$1; need_dir "$DIR"; need_git
-  kv DIR "$DIR"
-  kv FS "$(fs_type "$DIR")"
+  DIRABS=$(norm_dir "$DIR" 2>/dev/null) || DIRABS=$DIR
+  kv DIR "$DIRABS"
+  kv FS "$(fs_type "$DIRABS")"
   kv GIT "$(git --version 2>/dev/null)"
-  if _b=$(gh_bin); then
-    GH=$_b; export GH
+  if _db=$(gh_bin); then
+    GH=$_db; export GH
     kv GH "$(gh_version)"
     gh_version_ok && kv GH_OK yes || kv GH_OK "no（需 2.${GH_MIN_MINOR}+）"
   else
     kv GH absent
     kv GH_OK no
   fi
-  if is_fuse "$DIR"; then
-    _co=$(git -C "$DIR" config core.createObject 2>/dev/null)
-    case "$_co" in
+  if git -C "$DIRABS" rev-parse --git-dir >/dev/null 2>&1; then
+    # 无条件检查：不管什么文件系统，这里都该是 rename（见 init 里的说明）
+    _dc_co=$(git -C "$DIRABS" config core.createObject 2>/dev/null)
+    case "$_dc_co" in
       rename) kv CREATEOBJECT "rename(ok)" ;;
-      *)      kv CREATEOBJECT "${_co:-unset}(需要 rename，否则 add 必失败)" ;;
+      *)      kv CREATEOBJECT "${_dc_co:-unset}(需要 rename，否则 add 必失败)" ;;
     esac
-  fi
-  kv SAFE "$(git config --global --get-all safe.directory 2>/dev/null | tr '\n' ' ')"
-  if git -C "$DIR" rev-parse --git-dir >/dev/null 2>&1; then
     kv REPO yes
-    kv BRANCH "$(git -C "$DIR" symbolic-ref --short HEAD 2>/dev/null)"
-    kv ORIGIN "$(git -C "$DIR" remote get-url origin 2>/dev/null)"
-    kv TRACKED "$(git -C "$DIR" ls-files | wc -l)"
-    git -C "$DIR" count-objects -v 2>/dev/null | grep -E '^(count|size|garbage):' | sed 's/^/OBJ_/'
+    kv BRANCH "$(git -C "$DIRABS" symbolic-ref --short HEAD 2>/dev/null)"
+    kv ORIGIN "$(git -C "$DIRABS" remote get-url origin 2>/dev/null)"
+    kv TRACKED "$(git -C "$DIRABS" ls-files | wc -l | tr -d ' ')"
+    git -C "$DIRABS" count-objects -v 2>/dev/null | grep -E '^(count|size|garbage):' | sed 's/^/OBJ_/'
   else
     kv REPO no
   fi
-  kv OVER_100MB "$(find "$DIR" -type f -size +100M 2>/dev/null | wc -l)"
+  kv SAFE "$(git config --global --get-all safe.directory 2>/dev/null | tr '\n' ' ')"
+  kv OVER_100MB "$(find "$DIRABS" -path "$DIRABS/.git" -prune -o -type f -size +100M -print 2>/dev/null | wc -l | tr -d ' ')"
   [ -n "$GH_TOKEN" ] && kv TOKEN present || kv TOKEN absent
+  # 非交互是否真的生效：这几项由 ghlib.sh 统一 export，手敲 gh 时也要带上
+  kv NOINTERACT "GH_PROMPT_DISABLED=${GH_PROMPT_DISABLED:-unset} GIT_TERMINAL_PROMPT=${GIT_TERMINAL_PROMPT:-unset} EDITOR=${EDITOR:-unset}"
 }
 
 CMD=$1
 [ $# -gt 0 ] && shift
 
 case "$CMD" in
-  check)   [ $# -ge 1 ] || die1 "用法: sh $PROG check <DIR>";  cmd_check  "$1" ;;
-  init)    [ $# -ge 1 ] || die1 "用法: sh $PROG init <DIR>";   cmd_init   "$1" ;;
-  stage)   [ $# -ge 1 ] || die1 "用法: sh $PROG stage <DIR> [路径...]"; cmd_stage "$@" ;;
-  commit)  [ $# -ge 2 ] || die1 "用法: sh $PROG commit <DIR> \"提交说明\""; cmd_commit "$@" ;;
-  repo)    [ $# -ge 2 ] || die1 "用法: sh $PROG repo <DIR> <仓库名> [private|public]"; cmd_repo "$@" ;;
-  push)    [ $# -ge 1 ] || die1 "用法: sh $PROG push <DIR>";   cmd_push   "$1" ;;
-  release) [ $# -ge 4 ] || die1 "用法: sh $PROG release <DIR> <TAG> <标题> <资产文件> [说明.md]"; cmd_release "$@" ;;
+  check)     [ $# -ge 1 ] || die1 "用法: sh $PROG check <DIR>";  cmd_check  "$1" ;;
+  init)      [ $# -ge 1 ] || die1 "用法: sh $PROG init <DIR>";   cmd_init   "$1" ;;
+  stage)     [ $# -ge 1 ] || die1 "用法: sh $PROG stage <DIR> [路径...]"; cmd_stage "$@" ;;
+  commit)    [ $# -ge 2 ] || die1 "用法: sh $PROG commit <DIR> \"提交说明\""; cmd_commit "$@" ;;
+  repo)      [ $# -ge 2 ] || die1 "用法: sh $PROG repo <DIR> <仓库名> [private|public]"; cmd_repo "$@" ;;
+  push)      [ $# -ge 1 ] || die1 "用法: sh $PROG push <DIR>";   cmd_push   "$1" ;;
+  release)   [ $# -ge 4 ] || die1 "用法: sh $PROG release <DIR> <TAG> <标题> <资产文件> [说明.md]"; cmd_release "$@" ;;
   republish) [ $# -ge 4 ] || die1 "用法: sh $PROG republish <DIR> <TAG> <标题> <资产文件> [说明.md]"; cmd_republish "$@" ;;
-  assets)  [ $# -ge 2 ] || die1 "用法: sh $PROG assets <DIR> <TAG>"; cmd_assets "$@" ;;
-  doctor)  [ $# -ge 1 ] || die1 "用法: sh $PROG doctor <DIR>"; cmd_doctor "$1" ;;
+  assets)    [ $# -ge 2 ] || die1 "用法: sh $PROG assets <DIR> <TAG>"; cmd_assets "$@" ;;
+  doctor)    [ $# -ge 1 ] || die1 "用法: sh $PROG doctor <DIR>"; cmd_doctor "$1" ;;
   help|-h|--help) usage; exit 0 ;;
   "") usage; exit 1 ;;
   *) err "未知子命令: $CMD"; usage; exit 1 ;;

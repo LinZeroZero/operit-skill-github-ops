@@ -48,7 +48,12 @@
 | 列表 | `repos/…/issues?state=&per_page=` | `number` `state` `title`；**必须排除** `pull_request != null`（PR 也在 issues 列表里） |
 | 关闭 | `PATCH repos/…/issues/{n}` | 请求体 `state=closed` |
 | 评论 | `POST repos/…/issues/{n}/comments` | 请求体 `body` |
-| 创建 | `POST repos/…/issues` | 请求体 `title` `body` `labels`（数组，与 `-f` 不能混用，故走 `--input -`） |
+| 创建 | `POST repos/…/issues` | 请求体 `title` `body`（走 `-f`，由 gh 编码）；`labels` 另走一次 `PUT repos/…/issues/{n}/labels`，用 `-f 'labels[]=x'` |
+
+**实测注意**：`PUT /issues/{n}/labels` 对**不存在**的标签会**自动新建**并挂上
+（实测：传 `no-such-label-xyz` 后，该标签出现在 `GET /repos/{o}/{r}/labels` 里，接口仍返回 200）。
+也就是说标签名拼错不会报错，只会静默多出一个标签——所以脚本不做白名单校验，
+但用完记得去网页或用 `api -X DELETE repos/…/labels/<name>` 清掉。
 
 ## 4. Actions（ghadm.sh）
 
