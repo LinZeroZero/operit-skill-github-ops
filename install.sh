@@ -85,8 +85,10 @@ if ! ( : > "$TMP" ) 2>/dev/null; then
 fi
 
 printf '下载: %s\n' "$URL"
-curl -fL --retry 2 --connect-timeout 20 -o "$TMP" "$URL" \
-  || die "下载失败。可手动下载后解到 $ROOT：$URL" 3
+# 重试 5 次、间隔 2 秒：release 资产走 GitHub 的 CDN，刚上传的文件偶尔会回源 504
+# （实测上传后一两分钟内可能连续 504，几分钟后自愈）。重试比让使用者自己重跑省事。
+curl -fL --retry 5 --retry-delay 2 --connect-timeout 20 -o "$TMP" "$URL" \
+  || die "下载失败（5xx 多半是 GitHub CDN 抖动，等 1~2 分钟重跑；404 见 https://github.com/$REPO/releases）" 3
 
 # 只读清单验包：半截的 gzip 在这里就会失败，不会污染技能目录
 tar -tzf "$TMP" >/dev/null 2>&1 || die "包损坏或不是 tar.gz（大概率没下完整，删掉重试）" 4
