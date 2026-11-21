@@ -3,6 +3,9 @@ name: GitHub运维
 description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Release、PR/Issue、Actions、Gist；含 FUSE 上 git 写对象失败与分批推送。
 ---
 
+最后验证: 2026-11
+依赖版本: gh + git（未锁版本，先 `gh --version` 探测）
+
 # GitHub 运维（Operit / Android）
 
 两条链路共用同一个令牌：**git 管文件与提交，gh 管远端对象**。
@@ -17,7 +20,7 @@ description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Rel
 | `ghadm.sh` | 仓库/PR/Issue/Actions/Gist（低频） | 推完之后的所有事 |
 | `ghlib.sh` | 公共库（被上面三个 source） | 改退出码/闸门/探测逻辑时 |
 
-## 0. 四条硬规则
+## 0. 五条硬规则
 
 1. **先 `sh ghenv.sh check`，再做任何事。** gh 不在或版本低于 2.45 时，
    PR/Issue/Actions/Gist 全部不可用——先修环境，别硬试。
@@ -31,6 +34,12 @@ description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Rel
 4. **大仓库分批推；破坏性操作要复述目标。**
    手机上一次推 2 万文件/200 MB，断网就得从头来；分批后已完成批次不用重来。
    删仓库/删 Gist 必须把目标名再写一遍（`gate_confirm`），不一致直接退出码 5。
+5. **提 PR / 发版前，用 `origin/main` 的三点差异核对改动清单；交接文档里写的 base 一律当可疑。**
+   `git fetch` 后跑 `git diff --stat origin/main`（对工作区或分支头），数字必须对得上「你以为改了什么」。
+   反例（2026-11 实测）：交接文档写的 base 已落后远端一整代，照它建分支提 PR，PR 页面的
+   三点差异会把上游**已合并**的改动算成「删除」，合并即回退功能 —— 而页面看起来完全正常。
+   判据：PR 的 `changed_files` / `additions` / `deletions` 必须与自己数的一致；对不上就是 base 错，
+   把改动重放到 `origin/main` 之上再提交（备份 → `reset --hard origin/main` → 放回 → 逐文件比对 hash）。
 
 ## 1. 主链路一：把目录变成仓库并发版
 
@@ -67,6 +76,10 @@ sh "$S/ghrepo.sh" release "$P" v2.0.18 'v2.0.18 中文去广告' "$P/app.apk" /s
 - 一个 tag 只能挂一个 Release，重复创建会 422（脚本提前探测并直接点明）；
 - 不需要手工 `git tag`：GitHub 按 `tag_name` 自动建 tag，指向当前分支；
 - 说明文件可省略，缺省用「构建自 <短提交号> + 最近提交标题」。
+- **说明里的每一条都要能在 `git diff origin/main` 里指到对应行**。只在工作区存在过的
+  中间态、交接文档里抄来的条目与数值，都不算数（实测：某条「删除诊断写文件」在三个分支
+  全都不存在，却被写成 Fixed；同一批交接里的 so 尺寸也是笔误 —— 读者会去历史里翻，翻不到就是误导）。
+  同理，附件数值要回读：`ls -l` 的字节数与 `sha256sum` 当场核对，别从别处抄。
 
 **已经发过、只想换包**：用 `republish`（tag 不变，同名资产原地覆盖）：
 
@@ -202,6 +215,8 @@ sh /sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh install
 | `remote: File … exceeds 100.00 MB` | 该文件超硬上限，移出仓库或改 LFS（本技能不含 LFS） |
 | `non-fast-forward` / `fetch first` | 先 `git pull --rebase`，不要 `push -f` |
 | 推送后文件数对不上 | `git check-ignore -v <path>` 看 `.gitignore` |
+| PR diff 里出现大量「删除」，与自己改的内容不符 | base 落后远端（三点差异用的是旧 merge-base）→ 改动重放到 `origin/main` 再提，见规则 5 |
+| 本地 `git diff` 正常，PR 里却变了样 | 本地分支/工作区与远端 `main` 不同步 → 一切都以 `origin/main` 为基准比，不看本地 HEAD |
 | 发 Release 报 `already_exists` | 退出码 1；同 tag 只能一个 Release，改用 `republish` |
 | 命令卡住无输出 | gh 想开编辑器/分页器。本技能已 export `GH_PROMPT_DISABLED=1`、`GIT_EDITOR=true`、`GIT_TERMINAL_PROMPT=0`、`*_PAGER=cat`（`ghrepo.sh doctor` 的 `NOINTERACT=` 一行可自检）；手敲 gh 时也得自己加 |
 | 刚创建的 issue/PR 立刻 list 查不到 | 列表接口有秒级最终一致性延迟，看创建返回的编号，或隔几秒再查 |
@@ -228,3 +243,11 @@ sh /sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh install
 - `/sdcard/Download/Operit/skills/GitHub运维/references/destructive.md` —— 破坏性操作矩阵与闸门规则
 - `/sdcard/Download/Operit/skills/GitHub运维/references/sanitize.md` —— 仓库转 public 前的脱敏流程（什么该改、什么该留、远端复查）
 - `/sdcard/Download/Operit/skills/GitHub运维/scripts/` —— 四个脚本的实现
+
+## 8. 使用前自检
+
+**覆盖**：proot 内 gh/git 建仓推送、Release、PR/Issue、Actions、Gist、FUSE 写对象失败、分批推送、转 public 前脱敏。
+
+**不覆盖**：GitLab / Gitee、网页端操作、仓库内代码质量（交「代码审查」技能）、组织权限与密钥治理设计。
+
+**开工前复核**：单批推送量与实测一致；破坏性操作先过 `references/destructive.md` 闸门；转 public 前必走 `references/sanitize.md`。
