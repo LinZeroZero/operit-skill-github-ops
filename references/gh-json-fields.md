@@ -18,6 +18,18 @@
 
 升级 gh 或改脚本时，**只改这张表**，别在脚本里散着改。
 
+## 0. 传参：`-f` 与 `-F` 不是同义词
+
+| 写法 | 语义 | 适用 |
+|---|---|---|
+| `-f key=value` | 一律按**字符串**发送 | 文本、路径、分支名、`state=closed` |
+| `-F key=value` | 按字面量推断类型：`true`/`false` → 布尔，数字 → 整数，`@file` → 文件内容 | 布尔（`force=true`）、数字（`per_page=100`） |
+| `--input -` | 从 stdin 灌整个 JSON | 很长或带换行的文本（几十 KB 以上）、嵌套结构 |
+
+反例（2026-11-22 实测）：`api -X PATCH …/git/refs/heads/x -f sha=… -f force=true` 返回
+`422 For 'properties/force', "true" is not a boolean`；同一请求把 `force` 换成
+`-F force=true` 即通过。这类 422 容易被误读成权限或参数名问题。
+
 ## 1. 仓库（ghadm.sh）
 
 | 用途 | api 路径 | 用到的字段 |
@@ -40,6 +52,21 @@
 | 关闭 | `PATCH repos/…/pulls/{n}` | 请求体 `state=closed` |
 | 评论 | `POST repos/…/issues/{n}/comments` | 请求体 `body`（**PR 的评论走 issues 端点**） |
 | 创建 | `gh pr create --title --body --base --head` | 输出即 PR URL |
+
+### 2.1 路径与 ref 编码
+
+`repos/{owner}/{repo}/commits/{ref}` 里，`commits/` 之后的剩余路径段整体当作 ref，
+所以分支名里的 `/` 直接写，不必自己 URL 编码。
+下例 `$A` = 本技能的 `scripts/ghadm.sh`；`{owner}/{repo}` 是占位，替换成真实值再跑：
+
+```sh
+sh "$A" api /repos/{owner}/{repo}/commits/release/1.85 --jq .sha     # 200
+sh "$A" api /repos/{owner}/{repo}/commits/release%2F1.85 --jq .sha   # 200，同一个 sha
+```
+
+实测 2026-11-22：`microsoft/vscode` 的 `release/1.85`，两条请求均 200 且 sha 相同；
+ref 后面还跟段时（如 `…/commits/release/1.85/status`）同样不必编码。
+其他路由（`compare/{base}...{head}`、`git/ref/{ref}`）未验证，别顺势扩大。
 
 ## 3. Issue（ghadm.sh）
 

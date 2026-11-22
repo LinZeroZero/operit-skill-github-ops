@@ -40,7 +40,7 @@ usage() {
   repo-clone  <owner/repo> [目标目录]
 
 PR
-  pr-create   <DIR> <标题> <正文|-> [base分支]        # head 取当前分支
+  pr-create   <DIR> <标题> <正文|-> <base分支>        # base 必填（规则 6）；head 取当前分支
   pr-list     <owner/repo|.> [open|closed|all] [数量]
   pr-view     <owner/repo|.> <编号>
   pr-merge    <owner/repo|.> <编号> [merge|squash|rebase]
@@ -231,8 +231,9 @@ cmd_repo_clone() {
 # ---- PR ---------------------------------------------------------------------
 
 cmd_pr_create() {
-  [ $# -ge 3 ] || die1 "用法: sh $PROG pr-create <DIR> <标题> <正文|-> [base分支]"
-  DIR=$1; TITLE=$2; BODY=$(body_arg "$3"); BASE=${4:-main}
+  [ $# -ge 4 ] || die1 "用法: sh $PROG pr-create <DIR> <标题> <正文|-> <base分支>（base 必填：default_branch 不一定是 PR 目标，见 SKILL.md 规则 6）"
+  DIR=$1; TITLE=$2; BODY=$(body_arg "$3"); BASE=$4
+  [ -n "$BASE" ] || die1 "base 分支不能为空（见 SKILL.md 规则 6）"
   need_dir "$DIR"; need_repo "$DIR"; need_gh; need_token
   HEAD=$(git -C "$DIR" symbolic-ref --short HEAD 2>/dev/null)
   [ -n "$HEAD" ] || die2 "拿不到当前分支（detached HEAD）"

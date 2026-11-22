@@ -3,7 +3,7 @@ name: GitHub运维
 description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Release、PR/Issue、Actions、Gist；含 FUSE 上 git 写对象失败与分批推送。
 ---
 
-最后验证: 2026-11
+最后验证: 2026-11-22
 依赖版本: gh + git（未锁版本，先 `gh --version` 探测）
 
 # GitHub 运维（Operit / Android）
@@ -20,7 +20,7 @@ description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Rel
 | `ghadm.sh` | 仓库/PR/Issue/Actions/Gist（低频） | 推完之后的所有事 |
 | `ghlib.sh` | 公共库（被上面三个 source） | 改退出码/闸门/探测逻辑时 |
 
-## 0. 五条硬规则
+## 0. 六条硬规则
 
 1. **先 `sh ghenv.sh check`，再做任何事。** gh 不在或版本低于 2.45 时，
    PR/Issue/Actions/Gist 全部不可用——先修环境，别硬试。
@@ -34,12 +34,27 @@ description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Rel
 4. **大仓库分批推；破坏性操作要复述目标。**
    手机上一次推 2 万文件/200 MB，断网就得从头来；分批后已完成批次不用重来。
    删仓库/删 Gist 必须把目标名再写一遍（`gate_confirm`），不一致直接退出码 5。
-5. **提 PR / 发版前，用 `origin/main` 的三点差异核对改动清单；交接文档里写的 base 一律当可疑。**
-   `git fetch` 后跑 `git diff --stat origin/main`（对工作区或分支头），数字必须对得上「你以为改了什么」。
+5. **提 PR / 发版前，用目标分支（规则 6）的三点差异核对改动清单；交接文档里写的 base 一律当可疑。**
+   `git fetch` 后跑 `git diff --stat origin/<目标分支>`（对工作区或分支头），数字必须对得上「你以为改了什么」。
    反例（2026-11 实测）：交接文档写的 base 已落后远端一整代，照它建分支提 PR，PR 页面的
    三点差异会把上游**已合并**的改动算成「删除」，合并即回退功能 —— 而页面看起来完全正常。
    判据：PR 的 `changed_files` / `additions` / `deletions` 必须与自己数的一致；对不上就是 base 错，
-   把改动重放到 `origin/main` 之上再提交（备份 → `reset --hard origin/main` → 放回 → 逐文件比对 hash）。
+   把改动重放到 `origin/<目标分支>` 之上再提交（备份 → `reset --hard origin/<目标分支>` → 放回 → 逐文件比对 hash）。
+
+6. **提 PR 前先确认仓库要哪个目标分支。`default_branch` 是「clone 落到哪」，不是「PR 该合到哪」。**
+   按顺序取值，不要猜：
+   1. 有 `CONTRIBUTING.md` / `.github/pull_request_template.md` → 照它写；
+   2. 没有文档 → 数**最近一批 PR 的 base 分布**，实际执行的标准就在数据里：
+      ```sh
+      A="/sdcard/Download/Operit/skills/GitHub运维/scripts/ghadm.sh"
+      sh "$A" api '/repos/<owner>/<repo>/pulls?state=all&per_page=20' \
+        --jq '.[] | .base.ref' | sort | uniq -c | sort -rn
+      ```
+   3. 分布混杂 → 按多数派走，少数派当「例外」，不当反例。
+   反例（2026-11-22 实测）：某仓库 `default_branch=main`，最近 15 个 PR 里 14 个 base=`dev`。
+   按默认值提 PR 后被打回「目标分支错误」；善后更贵 —— `main` 与 `dev` 已分叉
+   （`dev` 缺 `main` 上 10 个提交、8 个 `strings.xml` 两边内容不同），只改 base 会让三点差异
+   把别人的改动算进来，必须把补丁重放到 `dev` 上（流程见 `references/pr-base.md`）。
 
 ## 1. 主链路一：把目录变成仓库并发版
 
@@ -76,7 +91,7 @@ sh "$S/ghrepo.sh" release "$P" v2.0.18 'v2.0.18 中文去广告' "$P/app.apk" /s
 - 一个 tag 只能挂一个 Release，重复创建会 422（脚本提前探测并直接点明）；
 - 不需要手工 `git tag`：GitHub 按 `tag_name` 自动建 tag，指向当前分支；
 - 说明文件可省略，缺省用「构建自 <短提交号> + 最近提交标题」。
-- **说明里的每一条都要能在 `git diff origin/main` 里指到对应行**。只在工作区存在过的
+- **说明里的每一条都要能在 `git diff origin/<目标分支>` 里指到对应行**（发版走默认分支时即 `origin/main`；PR 目标是别的分支就换成那个分支，见规则 6）。只在工作区存在过的
   中间态、交接文档里抄来的条目与数值，都不算数（实测：某条「删除诊断写文件」在三个分支
   全都不存在，却被写成 Fixed；同一批交接里的 so 尺寸也是笔误 —— 读者会去历史里翻，翻不到就是误导）。
   同理，附件数值要回读：`ls -l` 的字节数与 `sha256sum` 当场核对，别从别处抄。
@@ -168,7 +183,7 @@ A="/sdcard/Download/Operit/skills/GitHub运维/scripts/ghadm.sh"
 | 列我的仓库 | `sh "$A" repo-list 30` |
 | 改描述/可见性/topics | `sh "$A" repo-edit owner/repo "新描述" private bug,android` |
 | 克隆 | `sh "$A" repo-clone owner/repo /sdcard/your-project/x` |
-| 提 PR（head 取当前分支） | `sh "$A" pr-create "$P" "标题" "正文" main` |
+| 提 PR（head 取当前分支） | `sh "$A" pr-create "$P" "标题" "正文" <目标分支>` |
 | 列/看 PR | `sh "$A" pr-list owner/repo open 20` / `pr-view owner/repo 3` |
 | 合并 PR | `sh "$A" pr-merge owner/repo 3 squash` |
 | 关 PR / 评论 | `sh "$A" pr-close owner/repo 3` / `pr-comment owner/repo 3 "正文"` |
@@ -182,6 +197,8 @@ A="/sdcard/Download/Operit/skills/GitHub运维/scripts/ghadm.sh"
 | 任意 API 兜底 | `sh "$A" api repos/owner/repo --jq .stargazers_count` |
 | **删仓库** | `sh "$A" repo-delete owner/repo owner/repo` ← 第二个参数是复述 |
 | **删 Gist** | `sh "$A" gist-delete <id> <id>` ← 同上 |
+
+`pr-create` 的 base 必须显式给，且要先按规则 6 确认目标分支，别照抄示例里的占位符。
 
 细节：删除仓库需要令牌额外带 `delete_repo` scope，只勾 `repo` 会 403。
 `issue-create` 的标签由 GitHub 自己创建——**标签名拼错不会报错**，只会静默多出一个新标签
@@ -210,13 +227,16 @@ sh /sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh install
 | 脚本退出码 3 | 令牌无效/权限不足，换令牌；删仓库还要 `delete_repo` |
 | 脚本退出码 5 | 破坏性操作没复述目标，按提示把目标名再写一遍（第二个参数，不是 `--confirm` 开关） |
 | `HTTP 422` / `Validation Failed` | 退出码 **1**：参数或预条件冲突（名字非法、tag 已存在、字段不合法），不是网络问题 |
+| `HTTP 422` 且消息含 `is not a boolean` | `-f` 只传字符串，布尔/数字参数要用 `-F`，见 `references/gh-json-fields.md` §0 |
+| PR 被要求「把 base 改成 xxx」 | 提 PR 前没确认目标分支，见规则 6 与 `references/pr-base.md` |
+| CI 显示 `action_required`、jobs 数为 0 | 不是失败：首次贡献者的 run 需维护者 Approve and run；`pull_request.branches` 不含目标分支时压根不触发 |
 | `HTTP 404` 但网页有这仓库 | 私有仓库对无权令牌返回 404，是权限问题不是不存在 |
 | `Recv failure` / `HTTP 502` / push 卡住 | 降 HTTP/1.1、加 postBuffer、走本机代理，重跑可续传 |
 | `remote: File … exceeds 100.00 MB` | 该文件超硬上限，移出仓库或改 LFS（本技能不含 LFS） |
 | `non-fast-forward` / `fetch first` | 先 `git pull --rebase`，不要 `push -f` |
 | 推送后文件数对不上 | `git check-ignore -v <path>` 看 `.gitignore` |
-| PR diff 里出现大量「删除」，与自己改的内容不符 | base 落后远端（三点差异用的是旧 merge-base）→ 改动重放到 `origin/main` 再提，见规则 5 |
-| 本地 `git diff` 正常，PR 里却变了样 | 本地分支/工作区与远端 `main` 不同步 → 一切都以 `origin/main` 为基准比，不看本地 HEAD |
+| PR diff 里出现大量「删除」，与自己改的内容不符 | base 落后远端（三点差异用的是旧 merge-base）→ 改动重放到 `origin/<目标分支>` 再提，见规则 5、规则 6 |
+| 本地 `git diff` 正常，PR 里却变了样 | 本地分支/工作区与远端目标分支不同步 → 一切都以 `origin/<目标分支>` 为基准比，不看本地 HEAD |
 | 发 Release 报 `already_exists` | 退出码 1；同 tag 只能一个 Release，改用 `republish` |
 | 命令卡住无输出 | gh 想开编辑器/分页器。本技能已 export `GH_PROMPT_DISABLED=1`、`GIT_EDITOR=true`、`GIT_TERMINAL_PROMPT=0`、`*_PAGER=cat`（`ghrepo.sh doctor` 的 `NOINTERACT=` 一行可自检）；手敲 gh 时也得自己加 |
 | 刚创建的 issue/PR 立刻 list 查不到 | 列表接口有秒级最终一致性延迟，看创建返回的编号，或隔几秒再查 |
@@ -229,8 +249,10 @@ sh /sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh install
 - Discussions、Sponsors、Packages、Org/Teams 批量成员管理
 - 自建 Actions runner、生成 workflow 文件
 - Git LFS 服务端配额管理（只保留「>100 MB 必须拆或 LFS」的判定与提示）
-- 远端历史改写与常规 force push（唯一例外：刚建的空仓库 + `operit-push` 占位作者，
-  可 `commit --amend --reset-author` 后覆盖一次；`repo` 子命令正常情况会自动改掉占位身份）
+- 远端历史改写与常规 force push（例外两条：① 刚建的空仓库 + `operit-push` 占位作者，
+  可 `commit --amend --reset-author` 后覆盖一次，`repo` 子命令正常情况会自动改掉占位身份；
+  ② **自己 fork 上 PR 头分支**因目标分支变更而重放提交 —— 必须记下旧 sha 作回退，
+  不得用于他人分支或受保护分支，流程与回退命令见 `references/pr-base.md`）
 - `gh auth login` 交互登录、浏览器 OAuth
 
 ## 7. 参考文件（绝对路径，直接 read_file 打开）
@@ -242,6 +264,7 @@ sh /sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh install
 - `/sdcard/Download/Operit/skills/GitHub运维/references/gh-json-fields.md` —— 每个命令依赖哪些字段（版本敏感点清单）
 - `/sdcard/Download/Operit/skills/GitHub运维/references/destructive.md` —— 破坏性操作矩阵与闸门规则
 - `/sdcard/Download/Operit/skills/GitHub运维/references/sanitize.md` —— 仓库转 public 前的脱敏流程（什么该改、什么该留、远端复查）
+- `/sdcard/Download/Operit/skills/GitHub运维/references/pr-base.md` —— 目标分支确认、分叉判定、重放到目标分支与回退
 - `/sdcard/Download/Operit/skills/GitHub运维/scripts/` —— 四个脚本的实现
 
 ## 8. 使用前自检
