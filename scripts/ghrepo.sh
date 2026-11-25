@@ -86,7 +86,9 @@ write_notes() {
   _wn_sub=$(git -C "$_wn_dir" log -1 --format=%s 2>/dev/null)
   [ -n "$_wn_sha" ] || _wn_sha=none
   [ -n "$_wn_sub" ] || _wn_sub="（还没有提交）"
-  printf '构建自提交 `%s`\n\n%s\n' "$_wn_sha" "$_wn_sub" > "$_wn_out"
+  # ## 审查 节是规则 8 的发版门：骨架给结构，内容（合并了哪个 PR、结论摘要）由人填。
+  # 机器判结构、人判内容 —— 与 pr_body_guard 同一哲学；骨架挂在网页上很扎眼，正好逼人补写。
+  printf '构建自提交 `%s`\n\n%s\n\n## 审查\n\n（自动骨架：填合并了哪个 PR 与审查结论摘要 —— 规则 8）\n' "$_wn_sha" "$_wn_sub" > "$_wn_out"
 }
 
 # ---- 只读体检 ---------------------------------------------------------------
@@ -390,6 +392,9 @@ cmd_release() {
   fi
 
   resolve_notes "$NOTES" "$DIR"
+  # 规则 8 发版门：正文没有 ## 审查 节就拒绝 —— 门在 gh release create 之前，不是纸面规则。
+  # 本技能自己的发版链路必须成立，不能只对目标仓库的打包脚本提要求。
+  grep -q '^## 审查' "$SRC" || die1 "Release 正文没有 ## 审查 节（规则 8：写明对应 PR 与审查结论摘要）"
 
   # 建 Release 与上传资产分两步：合并成一条命令时，失败分不清是 tag 冲突还是上传中断。
   # 注意 `|| exit $?`：ghrun 内部是 exit，而它在 $(...) 子 shell 里运行，
@@ -432,6 +437,7 @@ cmd_republish() {
   fi
 
   resolve_notes "$NOTES" "$DIR"
+  grep -q '^## 审查' "$SRC" || die1 "Release 正文没有 ## 审查 节（规则 8：写明对应 PR 与审查结论摘要）"
 
   # 先改元信息再传包：万一上传中断，标题/说明已经是对的，重跑一次即可
   ghrun release edit "$TAG" -R "$SLUG" --title "$TITLE" --notes-file "$SRC" >/dev/null

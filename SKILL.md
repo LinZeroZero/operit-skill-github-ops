@@ -71,6 +71,14 @@ description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Rel
    - **结构门**：默认分支必须开 `Require a pull request before merging`（`approvals=0`），禁止直推。
      不设 `approvals=1` 的原因：单人仓库 GitHub 不允许 approve 自己的 PR，设了会把自己锁死。
      门装在「必须经 PR」+「必须有留痕」两处结构上，不装在按钮上。
+     落地（一次性动作，需令牌；2026-11-25 实测两次成功）—— 不开这条，「必须经 PR」只是愿望：
+     ```sh
+     # ruleset.json 最小内容：target=branch、conditions.ref_name.include=["~DEFAULT_BRANCH"]、
+     # rules=[{"type":"pull_request","parameters":{"required_approving_review_count":0,
+     #   "dismiss_stale_reviews_on_push":false,"require_code_owner_review":false,
+     #   "require_last_push_approval":false,"required_review_thread_resolution":false}}]
+     sh "$A" api --method POST "repos/<owner>/<repo>/rulesets" --input ruleset.json
+     ```
    反例（2026-11 实测）：合并 PR 后直接在 main 上推了 5 个提交修同一个发版脚本，
    其中 4 个是 fix、全部落在同一文件上 —— 没有审查时，上一轮没想清楚的地方要等下一轮才发现。
 
@@ -108,7 +116,9 @@ sh "$S/ghrepo.sh" release "$P" v2.0.18 'v2.0.18 中文去广告' "$P/app.apk" /s
 
 - 一个 tag 只能挂一个 Release，重复创建会 422（脚本提前探测并直接点明）；
 - 不需要手工 `git tag`：GitHub 按 `tag_name` 自动建 tag，指向当前分支；
-- 说明文件可省略，缺省用「构建自 <短提交号> + 最近提交标题」。
+- 说明文件可省略，缺省用「构建自 <短提交号> + 最近提交标题」+ `## 审查` 骨架节。
+- **说明必须带 `## 审查` 节，写明合并了哪个 PR 与审查结论摘要（规则 8）**——没有就拒绝发版。
+  自动骨架只能过「结构」这一半，别把待填的骨架原样发出去。
 - **说明里的每一条都要能在 `git diff origin/<目标分支>` 里指到对应行**（发版走默认分支时即 `origin/main`；PR 目标是别的分支就换成那个分支，见规则 6）。只在工作区存在过的
   中间态、交接文档里抄来的条目与数值，都不算数（实测：某条「删除诊断写文件」在三个分支
   全都不存在，却被写成 Fixed；同一批交接里的 so 尺寸也是笔误 —— 读者会去历史里翻，翻不到就是误导）。
@@ -203,7 +213,7 @@ A="/sdcard/Download/Operit/skills/GitHub运维/scripts/ghadm.sh"
 | 克隆 | `sh "$A" repo-clone owner/repo /sdcard/your-project/x` |
 | 提 PR（head 取当前分支） | `sh "$A" pr-create "$P" "标题" "正文或 -" <目标分支>` ← 传 `-` 自动补四栏骨架 |
 | 列/看 PR | `sh "$A" pr-list owner/repo open 20` / `pr-view owner/repo 3` |
-| 合并 PR | `sh "$A" pr-merge owner/repo 3 squash` |
+| 合并 PR | `sh "$A" pr-merge owner/repo 3 squash` ← 合并前先 `pr-comment` 一条审查结论（规则 8） |
 | 关 PR / 评论 | `sh "$A" pr-close owner/repo 3` / `pr-comment owner/repo 3 "正文"` |
 | 提 Issue | `sh "$A" issue-create owner/repo "标题" "正文" bug,docs` |
 | 列/关 Issue | `sh "$A" issue-list owner/repo open 20` / `issue-close owner/repo 5` |

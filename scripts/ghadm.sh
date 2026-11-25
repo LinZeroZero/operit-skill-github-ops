@@ -121,10 +121,12 @@ PR_BODY_SKELETON='## 改了什么
 pr_body_guard() {
   _pb=$1
   if [ -z "$_pb" ]; then printf '%s' "$PR_BODY_SKELETON"; return 0; fi
-  case $_pb in
-    *'##'*) printf '%s' "$_pb" ;;
-    *) die1 'PR 正文没有任何 ## 标题：至少写一栏（改了什么 / 为什么 / 怎么验证 / 怎么回退），或正文传 - 用骨架' ;;
-  esac
+  # 行首 ## 才算标题：行中出现的 a##b 不是栏。子串匹配会让它过门（审查实测），所以用行首匹配。
+  if printf '%s' "$_pb" | grep -q '^##'; then
+    printf '%s' "$_pb"
+  else
+    die1 'PR 正文没有任何 ## 标题：至少写一栏（改了什么 / 为什么 / 怎么验证 / 怎么回退），或正文传 - 用骨架'
+  fi
 }
 
 need_num() {
