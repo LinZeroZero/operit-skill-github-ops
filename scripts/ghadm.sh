@@ -103,6 +103,30 @@ body_arg() {
   if [ "$1" = "-" ]; then printf ''; else printf '%s' "$1"; fi
 }
 
+# PR 正文门禁（软校验）：只保证「有内容可读」，不强制四栏格式。
+# 为什么不强制四栏：轻量 PR（改个错字）凑四栏是噪音，硬拦会把人逼去找后门；
+# 而完全不管又会冒出「修复问题」这种零信息正文。折中成两条：
+#   - 正文为空 → 补四栏空骨架（骨架本身即提示，不拦）
+#   - 非空但没有任何 ## 标题 → 拒绝
+# 判据只取「至少一个 ##」，不数栏数、不查措辞：内容质量机器判不了，
+# 硬判只会产出假门禁 —— 写的人学会应付格式，看的人仍不知道为什么改。
+PR_BODY_SKELETON='## 改了什么
+
+## 为什么
+
+## 怎么验证
+
+## 怎么回退'
+
+pr_body_guard() {
+  _pb=$1
+  if [ -z "$_pb" ]; then printf '%s' "$PR_BODY_SKELETON"; return 0; fi
+  case $_pb in
+    *'##'*) printf '%s' "$_pb" ;;
+    *) die1 'PR 正文没有任何 ## 标题：至少写一栏（改了什么 / 为什么 / 怎么验证 / 怎么回退），或正文传 - 用骨架' ;;
+  esac
+}
+
 need_num() {
   case "$1" in
     ''|*[!0-9]*) die1 "编号必须是数字，收到：$1" ;;
@@ -234,6 +258,10 @@ cmd_pr_create() {
   [ $# -ge 4 ] || die1 "用法: sh $PROG pr-create <DIR> <标题> <正文|-> <base分支>（base 必填：default_branch 不一定是 PR 目标，见 SKILL.md 规则 6）"
   DIR=$1; TITLE=$2; BODY=$(body_arg "$3"); BASE=$4
   [ -n "$BASE" ] || die1 "base 分支不能为空（见 SKILL.md 规则 6）"
+  # 正文门禁放在目录检查之前：参数形态不对时不该先去碰仓库。
+  # `|| exit $?` 必须显式写 —— pr_body_guard 的 die1 在命令替换的子 shell 里执行，
+  # 不转发的话父进程会拿到空 BODY 继续往下走（同 ghlib.sh 里 ghrun 的坑）。
+  BODY=$(pr_body_guard "$BODY") || exit $?
   need_dir "$DIR"; need_repo "$DIR"; need_gh; need_token
   HEAD=$(git -C "$DIR" symbolic-ref --short HEAD 2>/dev/null)
   [ -n "$HEAD" ] || die2 "拿不到当前分支（detached HEAD）"
