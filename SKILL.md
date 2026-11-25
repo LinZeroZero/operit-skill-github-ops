@@ -20,7 +20,7 @@ description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Rel
 | `ghadm.sh` | 仓库/PR/Issue/Actions/Gist（低频） | 推完之后的所有事 |
 | `ghlib.sh` | 公共库（被上面三个 source） | 改退出码/闸门/探测逻辑时 |
 
-## 0. 七条硬规则
+## 0. 八条硬规则
 
 1. **先 `sh ghenv.sh check`，再做任何事。** gh 不在或版本低于 2.45 时，
    PR/Issue/Actions/Gist 全部不可用——先修环境，别硬试。
@@ -62,6 +62,17 @@ description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Rel
    `pr-create` 的正文传 `-` 会自动补空骨架；正文非空但一个 `##` 标题都没有会被拒（退出码 1）。
    只查「有没有标题」，不查栏数与措辞 —— 内容质量机器判不了，硬判只会让人学会应付格式。
    仓库有 `CONTRIBUTING.md` / `.github/pull_request_template.md` 时按规则 6 照它写，优先于本骨架。
+
+8. **合并与发版都必须留下审查痕迹 —— 两道门缺一道等于没审。**
+   - **合并前**：PR 里必须有一条审查结论评论，写清「审的区间（两个 sha）、几条 finding、
+     结论是可判定项全过还是需裁定」。没有这条评论不点 Merge。
+   - **发版前**：Release 正文必须有 `## 审查` 一节，写明对应 PR 号与上述结论摘要；
+     打包脚本出包前 grep 不到这一节就拒绝出包。
+   - **结构门**：默认分支必须开 `Require a pull request before merging`（`approvals=0`），禁止直推。
+     不设 `approvals=1` 的原因：单人仓库 GitHub 不允许 approve 自己的 PR，设了会把自己锁死。
+     门装在「必须经 PR」+「必须有留痕」两处结构上，不装在按钮上。
+   反例（2026-11 实测）：合并 PR 后直接在 main 上推了 5 个提交修同一个发版脚本，
+   其中 4 个是 fix、全部落在同一文件上 —— 没有审查时，上一轮没想清楚的地方要等下一轮才发现。
 
 ## 1. 主链路一：把目录变成仓库并发版
 
