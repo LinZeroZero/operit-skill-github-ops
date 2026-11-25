@@ -20,7 +20,7 @@ description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Rel
 | `ghadm.sh` | 仓库/PR/Issue/Actions/Gist（低频） | 推完之后的所有事 |
 | `ghlib.sh` | 公共库（被上面三个 source） | 改退出码/闸门/探测逻辑时 |
 
-## 0. 六条硬规则
+## 0. 八条硬规则
 
 1. **先 `sh ghenv.sh check`，再做任何事。** gh 不在或版本低于 2.45 时，
    PR/Issue/Actions/Gist 全部不可用——先修环境，别硬试。
@@ -55,6 +55,24 @@ description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Rel
    按默认值提 PR 后被打回「目标分支错误」；善后更贵 —— `main` 与 `dev` 已分叉
    （`dev` 缺 `main` 上 10 个提交、8 个 `strings.xml` 两边内容不同），只改 base 会让三点差异
    把别人的改动算进来，必须把补丁重放到 `dev` 上（流程见 `references/pr-base.md`）。
+
+7. **PR 正文不许一句「修复问题」。** 没有模板时按四栏写：
+   `## 改了什么`（文件级清单，条目要对得上 `git diff --stat`）/ `## 为什么`（要解决的现象）/
+   `## 怎么验证`（一条别人自己能跑的命令 + 预期输出）/ `## 怎么回退`（revert 哪个 commit、恢复哪个文件）。
+   `pr-create` 的正文传 `-` 会自动补空骨架；正文非空但一个 `##` 标题都没有会被拒（退出码 1）。
+   只查「有没有标题」，不查栏数与措辞 —— 内容质量机器判不了，硬判只会让人学会应付格式。
+   仓库有 `CONTRIBUTING.md` / `.github/pull_request_template.md` 时按规则 6 照它写，优先于本骨架。
+
+8. **合并与发版都必须留下审查痕迹 —— 两道门缺一道等于没审。**
+   - **合并前**：PR 里必须有一条审查结论评论，写清「审的区间（两个 sha）、几条 finding、
+     结论是可判定项全过还是需裁定」。没有这条评论不点 Merge。
+   - **发版前**：Release 正文必须有 `## 审查` 一节，写明对应 PR 号与上述结论摘要；
+     打包脚本出包前 grep 不到这一节就拒绝出包。
+   - **结构门**：默认分支必须开 `Require a pull request before merging`（`approvals=0`），禁止直推。
+     不设 `approvals=1` 的原因：单人仓库 GitHub 不允许 approve 自己的 PR，设了会把自己锁死。
+     门装在「必须经 PR」+「必须有留痕」两处结构上，不装在按钮上。
+   反例（2026-11 实测）：合并 PR 后直接在 main 上推了 5 个提交修同一个发版脚本，
+   其中 4 个是 fix、全部落在同一文件上 —— 没有审查时，上一轮没想清楚的地方要等下一轮才发现。
 
 ## 1. 主链路一：把目录变成仓库并发版
 
@@ -183,7 +201,7 @@ A="/sdcard/Download/Operit/skills/GitHub运维/scripts/ghadm.sh"
 | 列我的仓库 | `sh "$A" repo-list 30` |
 | 改描述/可见性/topics | `sh "$A" repo-edit owner/repo "新描述" private bug,android` |
 | 克隆 | `sh "$A" repo-clone owner/repo /sdcard/your-project/x` |
-| 提 PR（head 取当前分支） | `sh "$A" pr-create "$P" "标题" "正文" <目标分支>` |
+| 提 PR（head 取当前分支） | `sh "$A" pr-create "$P" "标题" "正文或 -" <目标分支>` ← 传 `-` 自动补四栏骨架 |
 | 列/看 PR | `sh "$A" pr-list owner/repo open 20` / `pr-view owner/repo 3` |
 | 合并 PR | `sh "$A" pr-merge owner/repo 3 squash` |
 | 关 PR / 评论 | `sh "$A" pr-close owner/repo 3` / `pr-comment owner/repo 3 "正文"` |
@@ -199,6 +217,7 @@ A="/sdcard/Download/Operit/skills/GitHub运维/scripts/ghadm.sh"
 | **删 Gist** | `sh "$A" gist-delete <id> <id>` ← 同上 |
 
 `pr-create` 的 base 必须显式给，且要先按规则 6 确认目标分支，别照抄示例里的占位符。
+正文同理：不确定写什么就传 `-`，脚本补骨架；一句话正文（无 `##` 标题）会被拒。
 
 细节：删除仓库需要令牌额外带 `delete_repo` scope，只勾 `repo` 会 403。
 `issue-create` 的标签由 GitHub 自己创建——**标签名拼错不会报错**，只会静默多出一个新标签
