@@ -59,7 +59,7 @@ description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Rel
 7. **PR 正文不许一句「修复问题」。** 没有模板时按四栏写：
    `## 改了什么`（文件级清单，条目要对得上 `git diff --stat`）/ `## 为什么`（要解决的现象）/
    `## 怎么验证`（一条别人自己能跑的命令 + 预期输出）/ `## 怎么回退`（revert 哪个 commit、恢复哪个文件）。
-   `pr-create` 的正文传 `-` 会自动补空骨架；正文非空但一个 `##` 标题都没有会被拒（退出码 1）。
+   `pr-create` 的正文传 `-` 会自动补空骨架；正文非空但没有任何一行以 `##` 开头会被拒（退出码 1）。
    只查「有没有标题」，不查栏数与措辞 —— 内容质量机器判不了，硬判只会让人学会应付格式。
    仓库有 `CONTRIBUTING.md` / `.github/pull_request_template.md` 时按规则 6 照它写，优先于本骨架。
 
@@ -71,13 +71,12 @@ description: 在 Operit(Android/proot) 上用 gh 管 GitHub：建仓推送、Rel
    - **结构门**：默认分支必须开 `Require a pull request before merging`（`approvals=0`），禁止直推。
      不设 `approvals=1` 的原因：单人仓库 GitHub 不允许 approve 自己的 PR，设了会把自己锁死。
      门装在「必须经 PR」+「必须有留痕」两处结构上，不装在按钮上。
-     落地（一次性动作，需令牌；2026-11-25 实测两次成功）—— 不开这条，「必须经 PR」只是愿望：
+     落地（一次性动作，需令牌；2026-11-25 实测两次成功）—— 不开这条，「必须经 PR」只是愿望。
+     完整可跑的 body 在 `references/ruleset-require-pr.json`：`name` 与 `enforcement` 都是 API 必填，
+     别照「最小字段」自己拼，缺一个就 422（2026-11-25 审查实测指出）。
      ```sh
-     # ruleset.json 最小内容：target=branch、conditions.ref_name.include=["~DEFAULT_BRANCH"]、
-     # rules=[{"type":"pull_request","parameters":{"required_approving_review_count":0,
-     #   "dismiss_stale_reviews_on_push":false,"require_code_owner_review":false,
-     #   "require_last_push_approval":false,"required_review_thread_resolution":false}}]
-     sh "$A" api --method POST "repos/<owner>/<repo>/rulesets" --input ruleset.json
+     sh "$A" api --method POST "repos/<owner>/<repo>/rulesets" \
+       --input /sdcard/Download/Operit/skills/GitHub运维/references/ruleset-require-pr.json
      ```
    反例（2026-11 实测）：合并 PR 后直接在 main 上推了 5 个提交修同一个发版脚本，
    其中 4 个是 fix、全部落在同一文件上 —— 没有审查时，上一轮没想清楚的地方要等下一轮才发现。
