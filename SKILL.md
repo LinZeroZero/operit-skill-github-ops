@@ -207,8 +207,11 @@ A="/sdcard/Download/Operit/skills/GitHub运维/scripts/ghadm.sh"
 
 ## 4. gh 环境（重装 proot 之后先看这段）
 
-`gh` 装的是官方 **linux_arm64 静态包**，位置 `/root/tools/gh/bin/gh`；
-tar.gz 备份在技能目录 `vendor/` 下，重装后一条命令恢复，**不需要 apt、不需要联网**：
+`gh` 装的是官方 **linux_arm64 静态包**。查找顺序：`GH_BIN` 显式指定 > `PATH` >
+`/root/tools/gh/bin/gh` > Operit 工作区 `bin/gh`（app 私有目录可执行、跨重装可复用；
+`/sdcard` 是 noexec 放不了二进制）。`vendor/` 不再存 38MB 的 tar.gz——二进制进 git
+只会让每次 clone 变慢；要离线重装，把包放到 `GH_TARBALL` 或 `/sdcard/Download/`，
+`install` 仍然认：
 
 ```sh
 sh /sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh install
@@ -223,7 +226,7 @@ sh /sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh install
 |---|---|
 | `unable to write file .git/objects/…` | 忘了 `core.createObject rename`，见规则 2 |
 | `detected dubious ownership` | `git config --global --add safe.directory '*'`（脚本 init 已自动登记两种路径写法） |
-| 脚本退出码 2、报没有 gh | `sh ghenv.sh install`（离线解压 vendor 包） |
+| 脚本退出码 2、报没有 gh | 先 `export PATH=/root/tools/gh/bin:$PATH` 或确认工作区 `bin/gh` 在；都没有再 `sh ghenv.sh install`（自备离线包，vendor 已不附带） |
 | 脚本退出码 3 | 令牌无效/权限不足，换令牌；删仓库还要 `delete_repo` |
 | 脚本退出码 5 | 破坏性操作没复述目标，按提示把目标名再写一遍（第二个参数，不是 `--confirm` 开关） |
 | `HTTP 422` / `Validation Failed` | 退出码 **1**：参数或预条件冲突（名字非法、tag 已存在、字段不合法），不是网络问题 |

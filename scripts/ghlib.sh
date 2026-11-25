@@ -86,6 +86,11 @@ gh_bin() {
   fi
   if command -v gh >/dev/null 2>&1; then command -v gh; return 0; fi
   if [ -x /root/tools/gh/bin/gh ]; then printf '%s' /root/tools/gh/bin/gh; return 0; fi
+  # 重装 proot 后 /root/tools 与 PATH 常为空；Operit 工作区 bin 是 app 私有目录、可执行且跨会话稳定。
+  # /sdcard 是 noexec 放不了二进制，所以用它做重装后的兜底落点。
+  if [ -x /data/user/0/com.ai.assistance.operit/files/workspace/bin/gh ]; then
+    printf '%s' /data/user/0/com.ai.assistance.operit/files/workspace/bin/gh; return 0
+  fi
   return 1
 }
 
