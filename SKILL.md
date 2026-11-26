@@ -184,10 +184,13 @@ tar -czf /root/github-ops.tar.gz --exclude='GitHub运维/.git' \
   -C /sdcard/Download/Operit/skills 'GitHub运维'
 tar -tzf /root/github-ops.tar.gz | grep -c '\.git/'     # 必须是 0
 # 引用完整性：包里 references/ 的「文件条目数」必须等于磁盘上的「文件数」，少一个就是漏包。
-# 只加不断言的话，漏包要等装到别人机器上、在 read_file / --input 处才暴露，离病因很远。
+# 漏包只在装到别人机器上的 read_file / --input 现场暴露，离病因很远，所以在打包这一步就拦。
+# 两侧都用「递归数文件」的同一口径（磁盘侧 find -type f，包内排除目录条目）——
+# 否则一旦 references/ 出现子目录或点文件，两侧数的不是一回事，断言会误报。
+# 判失败用 false，不用 echo：`|| echo` 会让整条命令恒返回 0，接进脚本或 CI 就是绿灯放行。
 test "$(tar -tzf /root/github-ops.tar.gz | grep 'references/' | grep -vc '/$')" \
-   -eq "$(ls -1 /sdcard/Download/Operit/skills/GitHub运维/references | wc -l | tr -d ' ')" \
-  || echo 'MISSING: references 下有文件没进包（新增文件后别忘了这条断言会抓出来）'
+   -eq "$(find /sdcard/Download/Operit/skills/GitHub运维/references -type f | wc -l | tr -d ' ')" \
+  || { printf 'MISSING: references 下有文件没进包\n'; false; }
 ```
 
 `--exclude` 一定要带：FUSE 的 `.git` 里有 `.l2s.tmp_*` 符号链接，`cp -a` 会刷一屏
