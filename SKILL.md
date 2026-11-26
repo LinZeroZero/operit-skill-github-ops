@@ -183,6 +183,11 @@ Operit 靠目录名认技能，解压后要得到 `skills/<技能名>/SKILL.md`�
 tar -czf /root/github-ops.tar.gz --exclude='GitHub运维/.git' \
   -C /sdcard/Download/Operit/skills 'GitHub运维'
 tar -tzf /root/github-ops.tar.gz | grep -c '\.git/'     # 必须是 0
+# 引用完整性：包里 references/ 的「文件条目数」必须等于磁盘上的「文件数」，少一个就是漏包。
+# 只加不断言的话，漏包要等装到别人机器上、在 read_file / --input 处才暴露，离病因很远。
+test "$(tar -tzf /root/github-ops.tar.gz | grep 'references/' | grep -vc '/$')" \
+   -eq "$(ls -1 /sdcard/Download/Operit/skills/GitHub运维/references | wc -l | tr -d ' ')" \
+  || echo 'MISSING: references 下有文件没进包（新增文件后别忘了这条断言会抓出来）'
 ```
 
 `--exclude` 一定要带：FUSE 的 `.git` 里有 `.l2s.tmp_*` 符号链接，`cp -a` 会刷一屏
@@ -293,6 +298,7 @@ sh /sdcard/Download/Operit/skills/GitHub运维/scripts/ghenv.sh install
 - `/sdcard/Download/Operit/skills/GitHub运维/references/destructive.md` —— 破坏性操作矩阵与闸门规则
 - `/sdcard/Download/Operit/skills/GitHub运维/references/sanitize.md` —— 仓库转 public 前的脱敏流程（什么该改、什么该留、远端复查）
 - `/sdcard/Download/Operit/skills/GitHub运维/references/pr-base.md` —— 目标分支确认、分叉判定、重放到目标分支与回退
+- `/sdcard/Download/Operit/skills/GitHub运维/references/ruleset-require-pr.json` —— 规则 8 结构门的完整 ruleset body（`POST /repos/<o>/<r>/rulesets` 的 `--input`；`name`/`enforcement` 是 API 必填）
 - `/sdcard/Download/Operit/skills/GitHub运维/scripts/` —— 四个脚本的实现
 
 ## 8. 使用前自检
